@@ -2,6 +2,8 @@ import csv
 import numpy as np
 import pyodbc
 import pandas as pd
+import geopy.distance
+from scipy import spatial
 
 class Load:
     def __init__(self,Id,carrierId,KPIScore,originDH,originDHLevels,PUGap,originCluster,destinationCluster,equipment,corridorVolume,oriCount,destCount,customerCount,customerAll,customerSize):
@@ -304,35 +306,38 @@ def Give_Carrier_Load_loading (CarrierID):
         COALESCE(B.Accept,0)*10   +
         COALESCE(B.Bounce,0)*(-10)     +
         COALESCE(O.BadOffer,0)*-20     'kpiScore',
+        L.Hot,
         COALESCE(O.OriginDH,B.OriginDH )   'originDH',
-        case when COALESCE(O.OriginDH,B.OriginDH )<=10 then 10
-        when COALESCE(O.OriginDH,B.OriginDH )<=50 then 50
-        when COALESCE(O.OriginDH,B.OriginDH )<=100 then 100
-        else 200 end 'originDH-levels',
+        case when COALESCE(O.OriginDH,B.OriginDH )<=10 then 10   
+        when COALESCE(O.OriginDH,B.OriginDH )<=50 then 50 
+        when COALESCE(O.OriginDH,B.OriginDH )<=100 then 100 
+        else 200 end 'originDH-levels', 
          --COALESCE(O.AvailableTime,B.EmptyTime) 'Available',
-         --case when LSP.[ScheduleCloseTime] = '1753-01-01' then
-         --convert(datetime, CONVERT(date, LSP.LoadByDate)) + convert(datetime, CONVERT(time, LSP.CloseTime))
+         --case when LSP.[ScheduleCloseTime] = '1753-01-01' then  
+         --convert(datetime, CONVERT(date, LSP.LoadByDate)) + convert(datetime, CONVERT(time, LSP.CloseTime)) 
          --else LSP.[ScheduleCloseTime] end  'PU_Appt',
-        datediff(hour,COALESCE(O.AvailableTime,B.EmptyTime),case when LSP.[ScheduleCloseTime] = '1753-01-01' then
-        convert(datetime, CONVERT(date, LSP.LoadByDate)) + convert(datetime, CONVERT(time, LSP.CloseTime))
+        datediff(hour,COALESCE(O.AvailableTime,B.EmptyTime),case when LSP.[ScheduleCloseTime] = '1753-01-01' then 
+        convert(datetime, CONVERT(date, LSP.LoadByDate)) + convert(datetime, CONVERT(time, LSP.CloseTime)) 
         else LSP.[ScheduleCloseTime] end) 'pu_GAP',
         --datediff(minute,COALESCE(O.AvailableTime,S.EmptyTime),S.PU_Appt) 'PU_GAP',
         --CUS.name 'CustomerName'
-        CityO.MainZipCode 'originZip',
-        CityD.MainZipCode 'sestinationZip',
+         CityO.Longitude 'originLon',CityO.Latitude 'originLat',
+         CityD.Longitude 'destinationLon',CityD.Latitude 'destinationLat',
          RCO.ClusterNAME 'originCluster'
         ,RCD.ClusterName 'destinationCluster'
-        , case when  l.equipmenttype like '%V%' then 'V' when  l.equipmenttype like 'R' then 'R' else 'other' end  'equipment'
-        ,COALESCE(Cor.Count_Corridor,0)  'Cor_Volume'
-        ,COALESCE(Ori.Count_Origin,0)  'Ori_Count'
-        ,COALESCE(Dest.Count_Dest	,0)  'Dest_Count'
-        ,COALESCE(CC.Count_Cus,0)  'Cus_Count'
-        ,COALESCE(CC.Count_ALL,0)   'Cus_All'
+        , case when  l.equipmenttype like '%V%' then 'V' when  l.equipmenttype like 'R' then 'R' else 'other' end 'equipment'
+        ,COALESCE(Cor.Count_Corridor,0)  'cor_Volume'
+        ,COALESCE(Ori.Count_Origin,0)  'ori_Count'
+        ,COALESCE(Dest.Count_Dest	,0)  'dest_Count'
+        ,COALESCE(CC.Count_Cus,0)  'cus_Count'
+        ,COALESCE(CC.Count_ALL,0)   'cus_All'
         ,case when COALESCE(CC.Count_ALL,0)<3000 then 'Small'
         when COALESCE(CC.Count_ALL,0)<10000 then 'Small-Med'
         when COALESCE(CC.Count_ALL,0)< 25000 then   'Med'
         when COALESCE(CC.Count_ALL,0)<50000 then  'Med-Large'
         else 'Large' end 'cus_Size'
+        ,C.DandBIndustryId  'industryID', 
+        D.Code 'industry'
         --,case when CC.Count_ALL>0 then CC.Count_Cus*1.0/CC.Count_ALL  else 0 end 'Cus_Ratio',
         --,L.Miles,
         -- Case
@@ -341,24 +346,27 @@ def Give_Carrier_Load_loading (CarrierID):
         --when L.Miles between 500 and 1000 then 'Medium'
         --when L.Miles between 1000 and 2000 then 'Medium-Long'
         --when L.Miles >2000 then 'Long' end 'Haul-Length'
-        from #Service S
+        from #Service S	
         full join #Bounce B on B.LoadID=S.LoadID and B.CarrierID=S.CarrierID
         full join #Offer O on S.LoadID=O.LoadID and S.CarrierID=O.CarrierID
-        inner join bazooka.dbo.LoadCustomer LCUS on LCUS.LoadID = COALESCE(B.LoadID,O.LoadID)
-        --inner join bazooka.dbo.Customer CUS on CUS.id=LCUS.CustomerID
-        inner join bazooka.dbo.load L on L.id=LCUS.LoadID AND LCUS.Main = 1
+        inner join bazooka.dbo.LoadCustomer LCUS on LCUS.LoadID = COALESCE(B.LoadID,O.LoadID) 
+        --inner join bazooka.dbo.Customer CUS on CUS.id=LCUS.CustomerID 
+        inner join bazooka.dbo.load L on L.id=LCUS.LoadID AND LCUS.Main = 1 
         inner join bazooka.dbo.loadstop LSP on LSP.id=L.OriginLoadStopID
         inner join bazooka.dbo.loadstop LSD on LSD.id=L.DestinationLoadStopID
         inner join bazooka.dbo.City CityO on CityO.id=LSP.CityID
         inner join bazooka.dbo.City CityD on CityD.id=LSD.CityID
-        LEFT JOIN Analytics.CTM.RateClusters RCO ON RCO.Location = L.OriginCityName + ', ' + L.OriginStateCode
-        LEFT JOIN Analytics.CTM.RateClusters RCD ON RCD.Location = L.DestinationCityName + ', ' + L.DestinationStateCode
-        left join #Carrier_Corridor Cor on Cor.Corridor=RCO.ClusterNAME +'-'+RCD.ClusterName
+        LEFT JOIN Analytics.CTM.RateClusters RCO ON RCO.Location = L.OriginCityName + ', ' + L.OriginStateCode 
+        LEFT JOIN Analytics.CTM.RateClusters RCD ON RCD.Location = L.DestinationCityName + ', ' + L.DestinationStateCode 
+        left join #Carrier_Corridor Cor on Cor.Corridor=RCO.ClusterNAME +'-'+RCD.ClusterName 
         left join #Carrier_Origin Ori on Ori.OriginCluster=RCO.ClusterNAME
         left join #Carrier_Dest Dest on Dest.DestinationCluster=RCD.ClusterNAME
-        left join #Carrier_Cust CC on CC.CustID = LCUS.CustomerID
+        left join #Carrier_Cust CC on CC.CustID = LCUS.CustomerID 
+        inner join bazooka.dbo.CustomerRelationshipManagement  C on C.CustomerID=LCUS.CustomerID
+        inner join
+        bazooka.dbo.DandBIndustry D  on C.DandBIndustryId=D.DandBIndustryId
         where   rnk=1
-        order by KPISCORE
+        order by kpiScore
         """
 
     b=pd.read_sql(query,cn,params= [CarrierID])
@@ -683,21 +691,23 @@ def Carrier_Load_loading(k):
     else LSP.[ScheduleCloseTime] end) 'pu_GAP',
     --datediff(minute,COALESCE(O.AvailableTime,S.EmptyTime),S.PU_Appt) 'PU_GAP',
     --CUS.name 'CustomerName'
-    CityO.MainZipCode 'originZip',
-    CityD.MainZipCode 'destinationZip',
-     RCO.ClusterNAME 'originCluster'
-    ,RCD.ClusterName 'destinationCluster'
-    , case when  l.equipmenttype like '%V%' then 'V' when  l.equipmenttype like 'R' then 'R' else 'other' end 'equipment'
-    --,COALESCE(Cor.Count_Corridor,0)  'Cor_Volume'
-    --,COALESCE(Ori.Count_Origin,0)  'Ori_Count'
-    --,COALESCE(Dest.Count_Dest	,0)  'Dest_Count'
-    --,COALESCE(CC.Count_Cus,0)  'Cus_Count'
-    ,COALESCE(CC.Count_ALL,0)   'cus_All'
-    ,case when COALESCE(CC.Count_ALL,0)<3000 then 'Small'
-    when COALESCE(CC.Count_ALL,0)<10000 then 'Small-Med'
-    when COALESCE(CC.Count_ALL,0)< 25000 then   'Med'
-    when COALESCE(CC.Count_ALL,0)<50000 then  'Med-Large'
-    else 'Large' end 'cus_Size'
+    CityO.Longitude 'originLon',CityO.Latitude 'originLat',
+	CityD.Longitude 'destinationLon',CityD.Latitude 'destinationLat',
+	 RCO.ClusterNAME 'originCluster'
+	,RCD.ClusterName 'destinationCluster'
+	, case when  l.equipmenttype like '%V%' then 'V' when  l.equipmenttype like 'R' then 'R' else 'other' end 'equipment'
+	,COALESCE(Cor.Count_Corridor,0)  'cor_Volume'
+	,COALESCE(Ori.Count_Origin,0)  'ori_Count'
+	,COALESCE(Dest.Count_Dest	,0)  'dest_Count'
+	,COALESCE(CC.Count_Cus,0)  'cus_Count'
+	,COALESCE(CC.Count_ALL,0)   'cus_All'
+	,case when COALESCE(CC.Count_ALL,0)<3000 then 'Small'
+	when COALESCE(CC.Count_ALL,0)<10000 then 'Small-Med'
+	when COALESCE(CC.Count_ALL,0)< 25000 then   'Med'
+	when COALESCE(CC.Count_ALL,0)<50000 then  'Med-Large'
+	else 'Large' end 'cus_Size'
+	,C.DandBIndustryId  'industryID', 
+	D.Code 'industry'
     --,case when CC.Count_ALL>0 then CC.Count_Cus*1.0/CC.Count_ALL  else 0 end 'Cus_Ratio',
     --,L.Miles,
     -- Case
@@ -722,12 +732,65 @@ def Carrier_Load_loading(k):
     left join #Carrier_Origin Ori on Ori.OriginCluster=RCO.ClusterNAME
     left join #Carrier_Dest Dest on Dest.DestinationCluster=RCD.ClusterNAME
     left join #Carrier_Cust CC on CC.CustID = LCUS.CustomerID
+	inner join bazooka.dbo.CustomerRelationshipManagement  C on C.CustomerID=LCUS.CustomerID
+	inner join
+	bazooka.dbo.DandBIndustry D  on C.DandBIndustryId=D.DandBIndustryId
     where   rnk=1
     order by carrierID
     """
 
     b = pd.read_sql(query, cn,params=[k])
     return (b)
+
+def Get_newload():
+    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSPROD;DATABASE=Bazooka;trusted_connection=true')
+    query="""
+    declare @date1 as date = getdate()
+    declare @date2 as date = dateadd (day,15,getdate())
+
+    select top 1 L.Id  'loadID',
+    LRD.Cost, LCUS.customerID 'customerID',
+    --COALESCE(O.OriginDH,B.OriginDH )   'originDH',
+	--datediff(hour,COALESCE(O.AvailableTime,B.EmptyTime),case when LSP.[ScheduleCloseTime] = '1753-01-01' then
+	--convert(datetime, CONVERT(date, LSP.LoadByDate)) + convert(datetime, CONVERT(time, LSP.CloseTime))
+	--else LSP.[ScheduleCloseTime] end) 'pu_GAP',
+    --CUS.name 'CustomerName'
+    CityO.Longitude 'originLon',CityO.Latitude 'originLat',
+	CityD.Longitude 'destinationLon',CityD.Latitude 'destinationLat',
+	 RCO.ClusterNAME 'originCluster'
+	,RCD.ClusterName 'destinationCluster'
+	, case when  l.equipmenttype like '%V%' then 'V' when  l.equipmenttype like 'R' then 'R' else 'other' end 'equipment'
+	,C.DandBIndustryId  'industryID', 
+	D.Code 'industry'
+    from bazooka.dbo.load L 
+    inner join bazooka.dbo.LoadCustomer LCUS on L.id=LCUS.LoadID AND LCUS.Main = 1
+    inner join bazooka.dbo.loadstop LSP on LSP.id=L.OriginLoadStopID
+    inner join bazooka.dbo.loadstop LSD on LSD.id=L.DestinationLoadStopID
+    inner join bazooka.dbo.City CityO on CityO.id=LSP.CityID
+    inner join bazooka.dbo.City CityD on CityD.id=LSD.CityID
+    LEFT JOIN Analytics.CTM.RateClusters RCO ON RCO.Location = L.OriginCityName + ', ' + L.OriginStateCode
+    LEFT JOIN Analytics.CTM.RateClusters RCD ON RCD.Location = L.DestinationCityName + ', ' + L.DestinationStateCode
+	inner join bazooka.dbo.CustomerRelationshipManagement  C on C.CustomerID=LCUS.CustomerID
+	inner join
+	bazooka.dbo.DandBIndustry D  on C.DandBIndustryId=D.DandBIndustryId
+	inner join (select entityid, SUM(amount) 'Cost' from Bazooka.dbo.LoadRateDetail
+                            where EntityType = 12 and EDIDataElementCode IN  ('405','FR',  'PM' ,'MN') and CreateDate > '2018-01-01' Group by entityid) LRD on LRD.entityid = lcus.id
+   where 
+   L.StateType = 1 and L.progresstype=1
+    and  L.LoadDate between @Date1 and @Date2  and L.Miles>0
+    AND L.Mode = 1  
+    --AND LCAR.CarrierID=@CarrierID
+    AND L.ShipmentType not in (3,4,6,7)
+    AND (CASE WHEN L.EquipmentType LIKE '%V%' THEN 'V' ELSE L.EquipmentType END) IN ('V', 'R')
+    --AND CAR.ContractVersion NOT IN ('TMS FILE', 'UPSDS CTM', 'UPSCD CTM') --Exclude Managed Loads
+    --AND COALESCE(PCUS.CODE,CUS.CODE) NOT IN ('UPSAMZGA','UPSRAILPEA')
+    --AND L.TotalRAte >= 150 AND L.TotalCost >= 150
+    AND  L.[OriginStateCode] in (select [Code]  FROM [Bazooka].[dbo].[State] where [ID]<=51)
+    AND  L.[DestinationStateCode] in (select [Code]  FROM [Bazooka].[dbo].[State] where [ID]<=51)
+    """
+    newload=pd.read_sql(query,cn )
+    return (newload)
+
 
 #mapping into matrix -ODE-Carrier
 def makeMatrix(x,y=[originDestinationEquipment],z=[]):
@@ -770,12 +833,25 @@ def makeMatrix(x,y=[originDestinationEquipment],z=[]):
 
 if __name__ == "__main__":
     loadList=  Carrier_Load_loading(10)
+
+    newload= Get_newload()
+
+    loadList['ori_dist'] = [
+        geopy.distance.vincenty((newload.originLat.tolist()[0], newload.originLon.tolist()[0]),
+                                (x.originLat, x.originLon)).miles for x in
+        loadList.itertuples()]
+    loadList['des_dist'] = [
+        geopy.distance.vincenty((newload.destinationLat.tolist()[0], newload.destinationLon.tolist()[0]),
+                                (x.destinationLat, x.destinationLon)).miles for x in loadList.itertuples()]
+
     #loadList.append (Carrier_Load_loading (10))
 
-    carriers=[]
-    for x in loadList.itertuples():
-      carriers.append(x.carrierID)
-    carriers=set(carriers)
+    # carriers=[]
+    # for x in loadList.itertuples():
+    #   carriers.append(x.carrierID)
+    # carriers=set(carriers)
+
+    carriers = set(loadList.carrierID.tolist())
 
     ODEList=[]
     for x in loadList.itertuples():
