@@ -2,8 +2,8 @@ import pyodbc
 import pandas as pd
 from scipy import spatial
 import geopy.distance
-from geopy.distance import vincenty
-from geopy.distance import geodesic
+# from geopy.distance import vincenty
+# from geopy.distance import geodesic
 import numpy as np
 import math
 import datetime
@@ -102,13 +102,13 @@ def Give_Carrier_Load_loading (CarrierID):
  
 	select LoadID,
 	Carrierid, 
-	case when datediff(minute,PU_Appt,PU_Arrive)<=60 then 30
-	when datediff(minute,PU_Appt,PU_Arrive)<= 120 then 25
-	when datediff(day,PU_Appt,PU_Arrive)=0 then 15
+	case when datediff(minute,PU_Appt,PU_Arrive)<=60 then 25
+	when datediff(minute,PU_Appt,PU_Arrive)<= 120 then 20
+	when datediff(day,PU_Appt,PU_Arrive)=0 then 10
 	else 5 end 'PU',
-	case when datediff(minute,DO_Appt,DO_Arrive)<=60 then 30
+	case when datediff(minute,DO_Appt,DO_Arrive)<=60 then 25
 	when datediff(minute,DO_Appt,DO_Arrive)<= 120 then 20
-	when datediff(day,DO_Appt,DO_Arrive)=0 then 15
+	when datediff(day,DO_Appt,DO_Arrive)=0 then 10
 	else 5 end 'Del'
 	from (
 	select  L.id 'LoadID', 
@@ -303,19 +303,23 @@ def Give_Carrier_Load_loading (CarrierID):
 	---End of Carrier Features
   
 
+
+	select * from (
 	select  COALESCE(B.LoadID,O.LoadID)   'loadID',
 	COALESCE(B.CarrierID,O.CarrierID)    'carrierID', L.hot 'hot',
-	O.cost,
+	O.cost 'customer_rate',
+	case when  B.Accept=1 then l.totalcost else o.Ask  end 'carrier_cost',
+	L.miles, (case when  B.Accept=1 then l.totalcost else o.Ask end)/(L.miles+COALESCE(O.OriginDH,B.OriginDH) )  'rpm',
 	--COALESCE(S.PUScore,0)          'puScore',
 	--COALESCE(S.DelScore,0)            'delScore',
-	--Coalesce(O.Offer, B.Offer)*30    'offer',
+	--Coalesce(O.Offer, B.Offer)*40    'offer',
 	--COALESCE(B.Accept,0)*10    'offerAccept' ,
-	--COALESCE(B.Bounce,0)*(-10)     'bounce'  ,
+	--COALESCE(B.Bounce,0)*(-20)     'bounce'  ,
 	--COALESCE(O.BadOffer,0)*-20     'badOffer',
 	COALESCE(S.PUScore,0) +       COALESCE(S.DelScore,0)  +
-	Coalesce(O.Offer, B.Offer)*30  +
+	Coalesce(O.Offer, B.Offer)*40  +
 	COALESCE(B.Accept,0)*10   +
-	COALESCE(B.Bounce,0)*(-10)     +
+	COALESCE(B.Bounce,0)*(-20)     +
 	COALESCE(O.BadOffer,0)*-20     'kpiScore',
 	COALESCE(O.OriginDH,B.OriginDH )   'originDH',
 	--case when COALESCE(O.OriginDH,B.OriginDH )<=10 then 10
@@ -331,8 +335,6 @@ def Give_Carrier_Load_loading (CarrierID):
 	else LSP.[ScheduleCloseTime] end) 'pu_GAP',
 	--datediff(minute,COALESCE(O.AvailableTime,S.EmptyTime),S.PU_Appt) 'PU_GAP',
 	--CUS.name 'CustomerName'
-	CityO.Latitude 'originLat',CityO.Longitude 'originLon',
-	CityD.Latitude 'destinationLat',CityD.Longitude 'destinationLon',
 	RCO.ClusterNAME 'originCluster'
 	,RCD.ClusterName 'destinationCluster'
 	,RCO.ClusterNAME+'-'+RCD.ClusterName 'corridor'
@@ -349,6 +351,8 @@ def Give_Carrier_Load_loading (CarrierID):
 	else 'Large' end 'cus_Size'
 	,C.DandBIndustryId  'industryID', 
 	D.Code 'industry'
+	,	CityO.Latitude 'originLat',CityO.Longitude 'originLon',
+	CityD.Latitude 'destinationLat',CityD.Longitude 'destinationLon'
 	--,case when CC.Count_ALL>0 then CC.Count_Cus*1.0/CC.Count_ALL  else 0 end 'Cus_Ratio',
 	--,L.Miles,
 	-- Case
@@ -376,9 +380,11 @@ def Give_Carrier_Load_loading (CarrierID):
 	inner join bazooka.dbo.CustomerRelationshipManagement  C on C.CustomerID=LCUS.CustomerID
 	inner join
 	bazooka.dbo.DandBIndustry D  on C.DandBIndustryId=D.DandBIndustryId
-	where   rnk=1
-	order by carrierID
-        """
+	where   rnk=1  
+)X
+	where pu_Gap>=0
+	 order by corridor
+	         """
 
     histload=pd.read_sql(query,cn,params= [CarrierID])
     histload['corridor_max']=max(histload.corridor_count)
@@ -468,13 +474,13 @@ def Carrier_Load_loading(k):
 
     select LoadID,
     Carrierid,
-    case when datediff(minute,PU_Appt,PU_Arrive)<=60 then 30
-    when datediff(minute,PU_Appt,PU_Arrive)<= 120 then 25
-    when datediff(day,PU_Appt,PU_Arrive)=0 then 15
+    case when datediff(minute,PU_Appt,PU_Arrive)<=60 then 25
+    when datediff(minute,PU_Appt,PU_Arrive)<= 120 then 20
+    when datediff(day,PU_Appt,PU_Arrive)=0 then 10
     else 5 end 'PU',
-    case when datediff(minute,DO_Appt,DO_Arrive)<=60 then 30
+    case when datediff(minute,DO_Appt,DO_Arrive)<=60 then 25
     when datediff(minute,DO_Appt,DO_Arrive)<= 120 then 20
-    when datediff(day,DO_Appt,DO_Arrive)=0 then 15
+    when datediff(day,DO_Appt,DO_Arrive)=0 then 10
     else 5 end 'Del'
     from (
     select  L.id 'LoadID',
@@ -728,9 +734,9 @@ def Carrier_Load_loading(k):
     --COALESCE(B.Bounce,0)*(-10)     'bounce'  ,
     --COALESCE(O.BadOffer,0)*-20     'badOffer',
     COALESCE(S.PUScore,0) +       COALESCE(S.DelScore,0)  +
-    Coalesce(O.Offer, B.Offer)*30  +
+    Coalesce(O.Offer, B.Offer)*40  +
     COALESCE(B.Accept,0)*10   +
-    COALESCE(B.Bounce,0)*(-10)     +
+    COALESCE(B.Bounce,0)*(-20)     +
     COALESCE(O.BadOffer,0)*-20     'kpiScore',
     COALESCE(O.OriginDH,B.OriginDH )   'originDH',
     --case when COALESCE(O.OriginDH,B.OriginDH )<=10 then 10
@@ -808,8 +814,9 @@ def Get_newload():
     declare @date1 as date = getdate()
     declare @date2 as date = dateadd (day,4,getdate())
 
-    select L.Id  'loadID',
-    LRD.Cost, LCUS.customerID 'customerID',
+    select L.Id  'loadID', convert (date,L.loaddate) 'loaddate',
+    LRD.Cost 'customer_rate', L.miles,
+    LCUS.customerID 'customerID',
     --COALESCE(O.OriginDH,B.OriginDH )   'originDH',
 	--datediff(hour,COALESCE(O.AvailableTime,B.EmptyTime),case when LSP.[ScheduleCloseTime] = '1753-01-01' then
 	--convert(datetime, CONVERT(date, LSP.LoadByDate)) + convert(datetime, CONVERT(time, LSP.CloseTime))
@@ -835,9 +842,9 @@ def Get_newload():
 	inner join
 	Analytics.bazooka.dbo.DandBIndustry D  on C.DandBIndustryId=D.DandBIndustryId
 	inner join (select entityid, SUM(amount) 'Cost' from Bazooka.dbo.LoadRateDetail
-                            where EntityType = 12 and EDIDataElementCode IN  ('405','FR',  'PM' ,'MN') and CreateDate > '2018-01-01' Group by entityid) LRD on LRD.entityid = lcus.id
+                            where EntityType = 12 and EDIDataElementCode IN  ('405','FR',  'PM' ,'MN','SCL' ) and CreateDate > '2018-01-01' Group by entityid) LRD on LRD.entityid = lcus.id
    where 
-   L.StateType = 1 and L.progresstype=1
+   L.StateType = 1 and L.progresstype=1 and LRD.Cost>100
     and  L.LoadDate between @Date1 and @Date2  and L.Miles>0
     AND L.Mode = 1  
     --AND LCAR.CarrierID=@CarrierID
@@ -915,7 +922,7 @@ def find_ode(kpilist, load, carrierID=None):
     matchlist=[]
     matchindex=[]
     perc=[]
-    carriers=[]
+
 ##    if carrierID is not None:
 ##        kpilist=subset(kpilist, kpilist.carrier=carrierID)
     for x in kpilist:
@@ -924,23 +931,19 @@ def find_ode(kpilist, load, carrierID=None):
             matchindex.append(kpilist.index(x))
             weight=1
             perc.append(weight)
-            carriers.append(x.carrier)
-    for x in kpilist:
-        if x.carrier not in carriers and x.ode.corridor == load.corridor:
+        elif x.ode.corridor == load.corridor and x.ode.equipment !=load.equipment:
              matchlist.append(x)
              matchindex.append(kpilist.index(x))
              weight=0.7
              perc.append(weight)
-             carriers.append(x.carrier)
-    for x in kpilist:
-        if x.carrier not in carriers and (x.ode.origin == load.origin or x.ode.destination==load.destination) and x.ode.equipment ==load.equipment:
-             matchlist.append(x)
-             matchindex.append(kpilist.index(x))
-             carriers.append(x.carrier)
-             origin_weight= x.ode.origin_count/x.ode.origin_max if x.ode.origin_max>0 else 0
-             dest_weight=x.ode.dest_count/x.ode.dest_max if x.ode.dest_max>0 else 0
-             weight= 1.0*max(origin_weight,dest_weight)
-             perc.append(weight)
+        elif x.ode.corridor != load.corridor and x.ode.equipment ==load.equipment:
+            if x.ode.origin == load.origin or x.ode.destination==load.destination :
+                 matchlist.append(x)
+                 matchindex.append(kpilist.index(x))
+                 origin_weight= x.ode.origin_count/x.ode.origin_max if x.ode.origin_max>0 else 0
+                 dest_weight=x.ode.dest_count/x.ode.dest_max if x.ode.dest_max>0 else 0
+                 weight= 1.0*max(origin_weight,dest_weight)
+                 perc.append(weight)
 ##        elif x.ode.origin == load.origin:
 ##            return kpilist.index(x)
     return matchlist,matchindex,perc
@@ -976,27 +979,36 @@ def similarity(loadlist, newload, weight):
         corridor_weight = 1.0 * load.corridor_count / load.corridor_max
     carrier_scores.append(
         {'carrierID': load.carrierID, 'loadID': newload.loadID, 'similarity': sim, 'kpi': load.kpiScore,
-         'weight': weight,'origin':newload.originCluster,'dest':newload.destinationCluster})
+         'rpm': load.rpm, 'miles': load.miles, 'customer_rate': load.customer_rate, 'weight': weight,
+         'origin': newload.originCluster, 'dest': newload.destinationCluster, 'loaddate': newload.loaddate})
     carrier_scores_df = pd.DataFrame(carrier_scores)
     carrier_scores_df['sim_rank'] = carrier_scores_df['similarity'].rank(ascending=False)
-    # print (len(carrier_scores_df))
-    return scoring(carrier_scores_df)
+    score_df = scoring(carrier_scores_df)
+    score_df['expected_margin'] = newload.customer_rate - score_df['rpm'] * newload.miles
+    score_df['expected_margin%'] = score_df['expected_margin'] / newload.customer_rate
+    return score_df
 
 
 def scoring(carrier_scores_df):
-    #sim_score_weight=0.7
-    #group_score_weight=1-sim_score_weight
-    k=0.3  # we can choose different condition: maybe top 5, top 10%, sim> 0.8 etc.
-    select_k=max(math.ceil(len(carrier_scores_df)*k),min(10,len(carrier_scores_df)))
-    carrier_scores_select=carrier_scores_df[carrier_scores_df['sim_rank'] < select_k+1]              # can be used for kpi matrix construction
-    if len(carrier_scores_select)==0:
-        print (carrier_scores_df.iloc[0].carrierID,carrier_scores_df.iloc[0].loadID)
-    sim_score=sum(carrier_scores_select.kpi*carrier_scores_select.similarity*carrier_scores_select.weight)/len(carrier_scores_select)  # top n loads
-    #group_score=sum(carrier_scores_df.kpi*carrier_scores_df.similarity*carrier_scores_df.weight)/len(carrier_scores_df)   # all group loads
-    #score=sim_score*sim_score_weight+group_score*group_score_weight
-    score=sim_score
-    return {'carrierID':int(carrier_scores_df.iloc[0].carrierID),'loadID':int(carrier_scores_df.iloc[0].loadID),
-            'origin': carrier_scores_df.iloc[0].origin, 'destination': carrier_scores_df.iloc[0].dest,'score':score}
+    # sim_score_weight=0.7
+    # group_score_weight=1-sim_score_weight
+    k = 0.3  # we can choose different condition: maybe top 5, top 10%, sim> 0.8 etc.
+    select_k = max(math.ceil(len(carrier_scores_df) * k), min(10, len(carrier_scores_df)))
+    carrier_scores_select = carrier_scores_df[
+        carrier_scores_df['sim_rank'] < select_k + 1]  # can be used for kpi matrix construction
+    if len(carrier_scores_select) == 0:
+        print(carrier_scores_df.iloc[0].carrierID, carrier_scores_df.iloc[0].loadID)
+    sim_score = sum(carrier_scores_select.kpi * carrier_scores_select.similarity * carrier_scores_select.weight) / len(
+        carrier_scores_select)  # top n loads
+    sim_rpm = sum(carrier_scores_select.rpm) / len(carrier_scores_select)
+    # group_score=sum(carrier_scores_df.kpi*carrier_scores_df.similarity*carrier_scores_df.weight)/len(carrier_scores_df)   # all group loads
+    # score=sim_score*sim_score_weight+group_score*group_score_weight
+    score = sim_score
+    score_df = {'carrierID': int(carrier_scores_df.iloc[0].carrierID), 'loadID': int(carrier_scores_df.iloc[0].loadID),
+                'origin': carrier_scores_df.iloc[0].origin, 'destination': carrier_scores_df.iloc[0].dest,
+                'loaddate': carrier_scores_df.iloc[0].loaddate, 'score': score, 'rpm': sim_rpm}
+
+    return score_df
 
 # with open('data.csv', newline='') as csv_file:
 #     reader = csv.reader(csv_file)
@@ -1066,31 +1078,28 @@ def check():
     t = pd.DataFrame(carrier_load_score)
     print(t)
 
-if __name__ == "__main__":
+def recommender(carrierID):
     t = TicToc()
     t.tic()
     newloads = Get_newload()
     newload_ode = get_odelist_new(newloads)
     t.toc('newload')
 
-    loadList=  Give_Carrier_Load_loading (7031)
     t.tic()
-    #loadList = Carrier_Load_loading(10)
-    t.toc('histload')
+    loadList = Give_Carrier_Load_loading(carrierID)
+    # loadList = Carrier_Load_loading(10)
 
-    t.tic()
     carriers = sorted(set(loadList.carrierID.tolist()))
     histode = get_odelist_hist(loadList)
     # odelist = set(histode)   # set is not useful for the object list
     odelist = histode.drop_duplicates(subset=['origin', 'destination', 'equipment'])
-    t.toc('histode')
+
     # histod=set(loadList.corridor.tolist())
     ##a=loadList.originCluster.tolist()
     ##b=loadList.destinationCluster.tolist()
 
-    t.tic()
     kpiMatrix = makeMatrix(loadList, odelist, carriers)
-    t.toc('kpiMatrix')
+    t.toc('histload_matrix')
 
     carrier_load_score = []
     t.tic()
@@ -1100,8 +1109,18 @@ if __name__ == "__main__":
         for j in range(0, len(matchlist)):
             score = similarity(matchlist[j].loads, newloads.iloc[i], weight[j])
             carrier_load_score.append(score)
-    results = pd.DataFrame(carrier_load_score).sort_values(by=['score'])
+    results = pd.DataFrame(carrier_load_score).sort_values(by=['score'],ascending=False)
     datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    results.to_csv('carrier_load_recommender' + datetime.datetime.now().strftime("%Y%m%d-%H%M") + '.csv', index=False,
-                   columns = ['carrierID', 'loadID', 'origin', 'destination','score'])
+    results.to_csv(
+        'carrier' + str(carrierID) + '_load_recommender' + datetime.datetime.now().strftime("%Y%m%d-%H%M") + '.csv',
+        index=False,
+        columns=['carrierID', 'loadID', 'origin', 'destination','loaddate', 'score','expected_margin','expected_margin%'])
     t.toc('scores')
+    return (0)
+
+if __name__ == "__main__":
+    carrierID = int(input('CarrierID:'))
+    recommender(carrierID)
+
+
+
