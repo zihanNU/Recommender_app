@@ -387,10 +387,12 @@ def Give_Carrier_Load_loading (CarrierID):
 	         """
 
     histload=pd.read_sql(query,cn,params= [CarrierID])
+    if (len(histload)==0):
+        return {'flag':0,'histload':0}
     histload['corridor_max']=max(histload.corridor_count)
     histload['origin_max']=max(histload.origin_count)
     histload['dest_max']=max(histload.dest_count)
-    return (histload)
+    return {'flag':1,'histload':histload}
 
 #k carriers
 def Carrier_Load_loading(k):
@@ -1290,8 +1292,14 @@ def find_ode(kpilist, load, carrierID=None):
              matchlist.append(x)
              matchindex.append(kpilist.index(x))
              carriers.append(x.carrier)
-             origin_weight= x.ode.origin_count/x.ode.origin_max if x.ode.origin_max>0 else 0
-             dest_weight=x.ode.dest_count/x.ode.dest_max if x.ode.dest_max>0 else 0
+             if x.ode.origin_max>0:
+                 origin_weight= x.ode.origin_count/x.ode.origin_max
+             else:
+                 origin_weight=0
+             if x.ode.dest_max>0:
+                 dest_weight=x.ode.dest_count/x.ode.dest_max
+             else:
+                 dest_weight=0
              weight= 1.0*max(origin_weight,dest_weight)
              perc.append(weight)
 ##        elif x.ode.origin == load.origin:
@@ -1324,9 +1332,9 @@ def similarity(loadlist, newload, weight):
         ##    loadlist['des_dist'] = [
         ##        geopy.distance.vincenty((newload.destinationLat.tolist()[0], newload.destinationLon.tolist()[0]),
         ##                                (x.destinationLat, x.destinationLon)).miles for x in loadList.itertuples()]
-        origin_weight = 1.0 * load.origin_count / load.origin_max
-        dest_weight = 1.0 * load.dest_count / load.dest_max
-        corridor_weight = 1.0 * load.corridor_count / load.corridor_max
+        # origin_weight = 1.0 * load.origin_count / load.origin_max
+        # dest_weight = 1.0 * load.dest_count / load.dest_max
+        # corridor_weight = 1.0 * load.corridor_count / load.corridor_max
         carrier_scores.append(
         {'carrierID': load.carrierID, 'loadID': newload.loadID, 'similarity': sim, 'kpi': load.kpiScore,
          'rpm': load.rpm, 'miles': load.miles, 'customer_rate': load.customer_rate, 'weight': weight,
@@ -1383,27 +1391,52 @@ def scoring(carrier_scores_df):
 #         customerSize = customerSize
 #         # Now create the Student instance and append it to the list.
 #         loadList.append(Load(Id,carrierId,KPIScore,originDH,originDHLevels,PUGap,originCluster,destinationCluster,equipment,corridorVolume,oriCount,destCount,customerCount,customerAll,customerSize))
-#def check():
-if __name__ == "__main__":
+
+
+def check(carrier,newloads):
     t = TicToc()
+    carrierID=int(carrier.carrierID)
     t.tic()
-    carrierID = 180543
+    carrier_load = Give_Carrier_Load_loading(carrierID)
+    if carrier_load['flag']==1:
+        loadList=carrier_load['histload']
+        # loadList=  Carrier_Load_loading(1000)
+        hist_recommender(carrier, newloads, loadList)
+    else:
+        dyna_recommender(carrier,newloads)
 
-    carrierinfo=pd.read_csv("truck20180725.csv").iloc[0:2]
+    return (0)
 
-    carrier1 = carrierinfo.iloc[0]
-    carrier2 = carrierinfo.iloc[1]
+def dyna_recommender(carrier,newloads):
+    carrier_load_score=[]
+    carrierID = int(carrier.carrierID)
+    for i in range(0, len(newloads)):
+        newload = newloads.iloc[i]
+        time_carrier = pd.Timestamp(carrier.EmptyDate)
+        time_load = pd.Timestamp(newload.pu_appt)
+        time_gap = time_load - time_carrier
+        score = {'carrierID': carrierID,
+             'loadID': int(newload.loadID),
+             'origin': newload.originCluster, 'destination': newload.destinationCluster,
+             'loaddate': newload.loaddate, 'score': 0, 'rpm': 0,
+             'expected_margin': 0,
+             'expected_margin%': 0,
+             'originDH': geopy.distance.vincenty((newload.originLat, newload.originLon),
+                                                 (carrier.originLat, carrier.originLon)).miles,
+             'destDH': geopy.distance.vincenty(
+                 (newload.destinationLat, newload.destinationLon),
+                 (carrier.destLat, carrier.destLat)).miles,
+             'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
+    carrier_load_score.append(score)
+    return (carrier_load_score)
 
-    #newloads = Get_testload(carrierID)
-    newloads= pd.read_csv("loaddata_0725.csv")
-    newloads=newloads[newloads.value<=carrier1.cargolimit]
+
+def hist_recommender(carrier,newloads,loadList):
+    t = TicToc()
+    carrierID = int(carrier.carrierID)
+    t.tic()
     newload_ode = get_odelist_new(newloads)
     t.toc('newload')
-
-    t.tic()
-    loadList = Give_Carrier_Load_loading(carrierID)
-    # loadList=  Carrier_Load_loading(1000)
-    t.toc('histload')
 
     t.tic()
     carriers = sorted(set(loadList.carrierID.tolist()))
@@ -1422,20 +1455,24 @@ if __name__ == "__main__":
     carrier_load_score = []
     t.tic()
     for i in range(0, len(newloads)):
-        time_carrier = pd.Timestamp(carrier1.EmptyDate)
-        time_load = pd.Timestamp(newloads.iloc[i].pu_appt)
+        newload=newloads.iloc[i]
+        time_carrier = pd.Timestamp(carrier.EmptyDate)
+        time_load = pd.Timestamp(newload.pu_appt)
         time_gap = time_load - time_carrier
-        matchlist, matchindex, weight = find_ode(kpiMatrix, newload_ode.iloc[i])
+        new_ode=newload_ode.iloc[i]
+        matchlist, matchindex, weight = find_ode(kpiMatrix,new_ode )
         # check for all carriers, return a match list for matched carriers
+
         for j in range(0, len(matchlist)):
-            score = similarity(matchlist[j].loads, newloads.iloc[i], weight[j])
+            score = similarity(matchlist[j].loads, newload, weight[j])
             ###This part is for dynamic info and verification'
-            score_update={'originDH':geopy.distance.vincenty((newloads.iloc[i].originLat, newloads.iloc[i].originLon),
-                                           (carrier1.OriginLatitude, carrier1.OriginLongitude)).miles,
-                          'destDH': geopy.distance.vincenty((newloads.iloc[i].destinationLat, newloads.iloc[i].destinationLon),
-                                        (carrier1.DestinationLatitude, carrier1.DestinationLatitude)).miles,
-                          'puGAP':  time_gap.days*24+time_gap.seconds/3600}
-                            # 'kpi':newloads.iloc[i].kpiScore,
+            score_update = {
+                'originDH': geopy.distance.vincenty((newload.originLat, newload.originLon),
+                                                    (carrier.originLat, carrier.originLon)).miles,
+                'destDH': geopy.distance.vincenty((newload.destinationLat, newload.destinationLon),
+                                                  (carrier.destLat, carrier.destLat)).miles,
+                'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
+            # 'kpi':newloads.iloc[i].kpiScore,
             #               'customer_rate':newloads.iloc[i].customer_rate,'carrier_rate':newloads.iloc[i].carrier_cost,
             #               'margin':newloads.iloc[i].customer_rate - newloads.iloc[i].carrier_cost}
 
@@ -1444,23 +1481,24 @@ if __name__ == "__main__":
             carrier_load_score.append(score)
         if len(matchlist) == 0:
             score = {'carrierID': carrierID,
-                     'loadID': int(newloads.iloc[i].loadID),
-                     'origin': newloads.iloc[i].originCluster, 'destination': newloads.iloc[i].destinationCluster,
-                     'loaddate': newloads.iloc[i].loaddate, 'score': 0, 'rpm': pd.DataFrame.mean(loadList.rpm),
-                     'expected_margin': newloads.iloc[i].customer_rate - pd.DataFrame.mean(loadList.rpm)* newloads.iloc[i].miles,
-                     'expected_margin%': 1-pd.DataFrame.mean(loadList.rpm)* newloads.iloc[i].miles/newloads.iloc[i].customer_rate,
-                     'originDH': geopy.distance.vincenty((newloads.iloc[i].originLat, newloads.iloc[i].originLon),
-                                                         (carrier1.originLat, carrier1.originLon)).miles,
+                     'loadID': int(newload.loadID),
+                     'origin': newload.originCluster, 'destination': newload.destinationCluster,
+                     'loaddate': newload.loaddate, 'score': 0, 'rpm': pd.DataFrame.mean(loadList.rpm),
+                     'expected_margin': newload.customer_rate - pd.DataFrame.mean(loadList.rpm) *
+                                        newload.miles,
+                     'expected_margin%': 1 - pd.DataFrame.mean(loadList.rpm) * newload.miles /newload.customer_rate,
+                     'originDH': geopy.distance.vincenty((newload.originLat, newload.originLon),
+                                                         (carrier.originLat, carrier.originLon)).miles,
                      'destDH': geopy.distance.vincenty(
-                         (newloads.iloc[i].destinationLat, newloads.iloc[i].destinationLon),
-                         (carrier1.destLat, carrier1.destLat)).miles,
-                     'puGAP':  time_gap.days*24+time_gap.seconds/3600}
-                      #carrier1 is a test
-                     # 'DH': newloads.iloc[i].originDH,
-                     # 'puGAP': newloads.iloc[i].pu_GAP, 'kpi': newloads.iloc[i].kpiScore,
-                     # 'customer_rate': newloads.iloc[i].customer_rate,
-                     # 'carrier_rate': newloads.iloc[i].carrier_cost,
-                     # 'margin': newloads.iloc[i].customer_rate - newloads.iloc[i].carrier_cost}
+                         (newload.destinationLat, newload.destinationLon),
+                         (carrier.destLat, carrier.destLat)).miles,
+                     'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
+            # carrier1 is a test
+            # 'DH': newloads.iloc[i].originDH,
+            # 'puGAP': newloads.iloc[i].pu_GAP, 'kpi': newloads.iloc[i].kpiScore,
+            # 'customer_rate': newloads.iloc[i].customer_rate,
+            # 'carrier_rate': newloads.iloc[i].carrier_cost,
+            # 'margin': newloads.iloc[i].customer_rate - newloads.iloc[i].carrier_cost}
             carrier_load_score.append(score)
     results = pd.DataFrame(carrier_load_score)
     datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1469,8 +1507,22 @@ if __name__ == "__main__":
         index=False,
         columns=['carrierID', 'loadID', 'loaddate', 'origin', 'destination', 'originDH', 'destDH',
                  'puGAP', 'customer_rate',
-                 'expected_margin', 'expected_margin%','score'])
+                 'expected_margin', 'expected_margin%', 'score'])
     t.toc('scores')
+    return (carrier_load_score)
+
+
+if __name__ == "__main__":
+    newloads= pd.read_csv("loaddata_0725.csv")
+    carrierinfo=pd.read_csv("truck20180725.csv").iloc[0:10]
+    for carrier in carrierinfo.itertuples():
+
+        newloads = newloads[newloads.value <= carrier.cargolimit]
+        check(carrier,newloads)
+
+
+    #newloads = Get_testload(carrierID)
+
 
 def recommender(carrierID):
     t = TicToc()
