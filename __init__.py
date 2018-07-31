@@ -8,6 +8,7 @@ import numpy as np
 import math
 import datetime
 from pytictoc import TicToc
+from scipy import stats
 
 class Load:
     def __init__(self,Id,carrierId,KPIScore,originDH,originDHLevels,PUGap,originCluster,destinationCluster,equipment,corridorVolume,oriCount,destCount,customerCount,customerAll,customerSize):
@@ -309,6 +310,7 @@ def Give_Carrier_Load_loading (CarrierID):
 	COALESCE(B.CarrierID,O.CarrierID)    'carrierID', L.hot 'hot',
 	O.cost 'customer_rate',
 	case when  B.Accept=1 then l.totalcost else o.Ask  end 'carrier_cost',
+	(O.cost-(case when  B.Accept=1 then l.totalcost else o.Ask  end ) )/O.cost*100 'margin_perc',
 	L.miles, (case when  B.Accept=1 then l.totalcost else o.Ask end)/(L.miles+COALESCE(O.OriginDH,B.OriginDH) )  'rpm',
 	--COALESCE(S.PUScore,0)          'puScore',
 	--COALESCE(S.DelScore,0)            'delScore',
@@ -1268,7 +1270,7 @@ def get_odelist_new(loadlist):
 
 def find_ode(kpilist, load, carrierID=None):
     matchlist=[]
-    matchindex=[]
+    #matchindex=[]
     perc=[]
     carriers=[]
 ##    if carrierID is not None:
@@ -1276,21 +1278,21 @@ def find_ode(kpilist, load, carrierID=None):
     for x in kpilist:
         if x.ode.corridor == load.corridor and x.ode.equipment ==load.equipment :
             matchlist.append(x)
-            matchindex.append(kpilist.index(x))
+            #matchindex.append(kpilist.index(x))
             weight=1
             perc.append(weight)
             carriers.append(x.carrier)
     for x in kpilist:
         if x.carrier not in carriers and x.ode.corridor == load.corridor:
              matchlist.append(x)
-             matchindex.append(kpilist.index(x))
+             #matchindex.append(kpilist.index(x))
              weight=0.7
              perc.append(weight)
              carriers.append(x.carrier)
     for x in kpilist:
         if x.carrier not in carriers and (x.ode.origin == load.origin or x.ode.destination==load.destination) and x.ode.equipment ==load.equipment:
              matchlist.append(x)
-             matchindex.append(kpilist.index(x))
+             #matchindex.append(kpilist.index(x))
              carriers.append(x.carrier)
              if x.ode.origin_max>0:
                  origin_weight= x.ode.origin_count/x.ode.origin_max
@@ -1304,7 +1306,7 @@ def find_ode(kpilist, load, carrierID=None):
              perc.append(weight)
 ##        elif x.ode.origin == load.origin:
 ##            return kpilist.index(x)
-    return matchlist,matchindex,perc
+    return matchlist, perc
 
 
 def similarity(loadlist, newload, weight):
@@ -1338,6 +1340,7 @@ def similarity(loadlist, newload, weight):
         carrier_scores.append(
         {'carrierID': load.carrierID, 'loadID': newload.loadID, 'similarity': sim, 'kpi': load.kpiScore,
          'rpm': load.rpm, 'miles': load.miles, 'customer_rate': load.customer_rate, 'weight': weight,
+         'margin_perc':load.margin_perc,
          'origin': newload.originCluster, 'dest': newload.destinationCluster, 'loaddate': newload.loaddate})
     carrier_scores_df = pd.DataFrame(carrier_scores)
     carrier_scores_df['sim_rank'] = carrier_scores_df['similarity'].rank(ascending=False)
@@ -1351,20 +1354,22 @@ def scoring(carrier_scores_df):
     # sim_score_weight=0.7
     # group_score_weight=1-sim_score_weight
     k = 0.3  # we can choose different condition: maybe top 5, top 10%, sim> 0.8 etc.
+    carrier_info=carrier_scores_df.iloc[0]
     select_k = max(math.ceil(len(carrier_scores_df) * k), min(10, len(carrier_scores_df)))
     carrier_scores_select = carrier_scores_df[
         carrier_scores_df['sim_rank'] < select_k + 1]  # can be used for kpi matrix construction
     if len(carrier_scores_select) == 0:
-        print(carrier_scores_df.iloc[0].carrierID, carrier_scores_df.iloc[0].loadID)
+        print(carrier_info.carrierID, carrier_info.loadID)
     sim_score = sum(carrier_scores_select.kpi * carrier_scores_select.similarity * carrier_scores_select.weight) / len(
         carrier_scores_select)  # top n loads
+    sim_margin = sum(carrier_scores_select.margin_perc) / len(carrier_scores_select)
     sim_rpm = sum(carrier_scores_select.rpm) / len(carrier_scores_select)
     # group_score=sum(carrier_scores_df.kpi*carrier_scores_df.similarity*carrier_scores_df.weight)/len(carrier_scores_df)   # all group loads
     # score=sim_score*sim_score_weight+group_score*group_score_weight
     score = sim_score
-    score_df = {'carrierID': int(carrier_scores_df.iloc[0].carrierID), 'loadID': int(carrier_scores_df.iloc[0].loadID),
-                'origin': carrier_scores_df.iloc[0].origin, 'destination': carrier_scores_df.iloc[0].dest,
-                'loaddate': carrier_scores_df.iloc[0].loaddate, 'score': score, 'rpm': sim_rpm}
+    score_df = {'carrierID': int(carrier_info.carrierID), 'loadID': int(carrier_info.loadID),
+                'origin': carrier_info.origin, 'destination': carrier_info.dest,
+                'loaddate': carrier_info.loaddate, 'hist_perf': score, 'rpm': sim_rpm, 'margin_perc': sim_margin}
 
     return score_df
 
@@ -1401,11 +1406,11 @@ def check(carrier,newloads):
     if carrier_load['flag']==1:
         loadList=carrier_load['histload']
         # loadList=  Carrier_Load_loading(1000)
-        hist_recommender(carrier, newloads, loadList)
+        carrier_load_score=hist_recommender(carrier, newloads, loadList)
     else:
-        dyna_recommender(carrier,newloads)
+        carrier_load_score=dyna_recommender(carrier,newloads)
 
-    return (0)
+    return (carrier_load_score)
 
 def dyna_recommender(carrier,newloads):
     carrier_load_score=[]
@@ -1418,20 +1423,25 @@ def dyna_recommender(carrier,newloads):
         score = {'carrierID': carrierID,
              'loadID': int(newload.loadID),
              'origin': newload.originCluster, 'destination': newload.destinationCluster,
-             'loaddate': newload.loaddate, 'score': 0, 'rpm': 0,
+             'loaddate': newload.loaddate, 'hist_perf': 0, 'rpm': 0,
              'expected_margin': 0,
              'expected_margin%': 0,
+                 'margin_perc':0,
              'originDH': geopy.distance.vincenty((newload.originLat, newload.originLon),
                                                  (carrier.originLat, carrier.originLon)).miles,
              'destDH': geopy.distance.vincenty(
-                 (newload.destinationLat, newload.destinationLon),
-                 (carrier.destLat, carrier.destLat)).miles,
+                 (newload.destinationLat, newload.destinationLon),(carrier.destLat, carrier.destLon)).miles,
+             'totalDH': float(geopy.distance.vincenty((newload.destinationLat, newload.destinationLon),
+                     (carrier.destLat, carrier.destLon)).miles) +
+                        float(geopy.distance.vincenty((newload.originLat, newload.originLon),
+                                                      (carrier.originLat, carrier.originLon)).miles),
              'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
-    carrier_load_score.append(score)
+        carrier_load_score.append(score)
     return (carrier_load_score)
 
 
 def hist_recommender(carrier,newloads,loadList):
+    """once there is any historical information for given carrier, use historical info to calculate the scores(hist preference)"""
     t = TicToc()
     carrierID = int(carrier.carrierID)
     t.tic()
@@ -1452,15 +1462,17 @@ def hist_recommender(carrier,newloads,loadList):
     kpiMatrix = makeMatrix(loadList, odelist, carriers)
     t.toc('kpiMatrix')
 
+
     carrier_load_score = []
     t.tic()
     for i in range(0, len(newloads)):
         newload=newloads.iloc[i]
+        new_ode=newload_ode.iloc[i]
         time_carrier = pd.Timestamp(carrier.EmptyDate)
         time_load = pd.Timestamp(newload.pu_appt)
         time_gap = time_load - time_carrier
-        new_ode=newload_ode.iloc[i]
-        matchlist, matchindex, weight = find_ode(kpiMatrix,new_ode )
+
+        matchlist,   weight = find_ode(kpiMatrix,new_ode )
         # check for all carriers, return a match list for matched carriers
 
         for j in range(0, len(matchlist)):
@@ -1470,7 +1482,11 @@ def hist_recommender(carrier,newloads,loadList):
                 'originDH': geopy.distance.vincenty((newload.originLat, newload.originLon),
                                                     (carrier.originLat, carrier.originLon)).miles,
                 'destDH': geopy.distance.vincenty((newload.destinationLat, newload.destinationLon),
-                                                  (carrier.destLat, carrier.destLat)).miles,
+                                                  (carrier.destLat, carrier.destLon)).miles,
+                'totalDH': float(geopy.distance.vincenty((newload.destinationLat, newload.destinationLon),
+                                          (carrier.destLat, carrier.destLon)).miles) +
+                           float(geopy.distance.vincenty((newload.originLat, newload.originLon),
+                                                         (carrier.originLat, carrier.originLon)).miles),
                 'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
             # 'kpi':newloads.iloc[i].kpiScore,
             #               'customer_rate':newloads.iloc[i].customer_rate,'carrier_rate':newloads.iloc[i].carrier_cost,
@@ -1483,15 +1499,21 @@ def hist_recommender(carrier,newloads,loadList):
             score = {'carrierID': carrierID,
                      'loadID': int(newload.loadID),
                      'origin': newload.originCluster, 'destination': newload.destinationCluster,
-                     'loaddate': newload.loaddate, 'score': 0, 'rpm': pd.DataFrame.mean(loadList.rpm),
+                     'loaddate': newload.loaddate, 'hist_perf': 0, 'rpm': pd.DataFrame.mean(loadList.rpm),
                      'expected_margin': newload.customer_rate - pd.DataFrame.mean(loadList.rpm) *
                                         newload.miles,
                      'expected_margin%': 1 - pd.DataFrame.mean(loadList.rpm) * newload.miles /newload.customer_rate,
-                     'originDH': geopy.distance.vincenty((newload.originLat, newload.originLon),
-                                                         (carrier.originLat, carrier.originLon)).miles,
-                     'destDH': geopy.distance.vincenty(
+                     'margin_perc':pd.DataFrame.mean(loadList.margin_perc),
+                     'originDH': float(geopy.distance.vincenty((newload.originLat, newload.originLon),
+                                                         (carrier.originLat, carrier.originLon)).miles),
+                     'destDH': float(geopy.distance.vincenty(
                          (newload.destinationLat, newload.destinationLon),
-                         (carrier.destLat, carrier.destLat)).miles,
+                         (carrier.destLat, carrier.destLon)).miles),
+                     'totalDH':float(geopy.distance.vincenty(
+                         (newload.destinationLat, newload.destinationLon),
+                         (carrier.destLat, carrier.destLon)).miles) +
+                               float(geopy.distance.vincenty((newload.originLat, newload.originLon),
+                                                         (carrier.originLat, carrier.originLon)).miles),
                      'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
             # carrier1 is a test
             # 'DH': newloads.iloc[i].originDH,
@@ -1500,28 +1522,46 @@ def hist_recommender(carrier,newloads,loadList):
             # 'carrier_rate': newloads.iloc[i].carrier_cost,
             # 'margin': newloads.iloc[i].customer_rate - newloads.iloc[i].carrier_cost}
             carrier_load_score.append(score)
-    results = pd.DataFrame(carrier_load_score)
-    datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    results.to_csv(
-        'carrier' + str(carrierID) + '_load_recommender' + datetime.datetime.now().strftime("%Y%m%d-%H%M") + '.csv',
-        index=False,
-        columns=['carrierID', 'loadID', 'loaddate', 'origin', 'destination', 'originDH', 'destDH',
-                 'puGAP', 'customer_rate',
-                 'expected_margin', 'expected_margin%', 'score'])
-    t.toc('scores')
+    t.toc('scoring')
     return (carrier_load_score)
 
 
+def score_DH(DH,radius,penalty_radius):
+    radius_DH=[i for i in DH if i<=radius]
+    penalty_DH=[i for i in DH if i<=penalty_radius and i>=radius]
+    score =np.array([100-stats.percentileofscore(radius_DH, i) for i in DH])
+    penalty =np.array([stats.percentileofscore(penalty_DH, i) for i in DH])
+    return  score - penalty
+
+
+
 if __name__ == "__main__":
-    newloads= pd.read_csv("loaddata_0725.csv")
-    carrierinfo=pd.read_csv("truck20180725.csv").iloc[0:10]
-    for carrier in carrierinfo.itertuples():
-
-        newloads = newloads[newloads.value <= carrier.cargolimit]
-        check(carrier,newloads)
-
-
+    newloads= pd.read_csv("loaddata_0730.csv")
     #newloads = Get_testload(carrierID)
+    carrierinfo=pd.read_csv("truck20180730.csv").iloc[0:1]
+    for carrier in carrierinfo.itertuples():
+        print (carrier.carrierID)
+        newloads_select = newloads[newloads.value <= carrier.cargolimit]
+        if len(newloads_select)>0:
+            carrier_load_score=check(carrier,newloads_select)
+            if (len(carrier_load_score) > 0):
+                results = pd.DataFrame(carrier_load_score)
+                datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                results['ODH_Score']=score_DH(results['originDH'].tolist(),200,500)
+                results['totalDH_Score'] = score_DH(results['totalDH'].tolist(), 300, 800)
+                results['total_Score'] = results['ODH_Score'] * 0.40 + results['totalDH_Score'] * 0.60 + results['hist_perf'] * 0.3
+
+                results.to_csv(
+                    'carrier' + str(carrier.carrierID) + '_load_recommender' + datetime.datetime.now().strftime(
+                        "%Y%m%d-%H%M%S") + '.csv',
+                    index=False,
+                    columns=['carrierID', 'loadID', 'loaddate', 'origin', 'destination', 'originDH', 'destDH',
+                             'totalDH',
+                             'puGAP',
+                             'expected_margin', 'expected_margin%','margin_perc', 'hist_perf','total_Score'])
+
+
+
 
 
 def recommender(carrierID):
@@ -1550,10 +1590,11 @@ def recommender(carrierID):
     carrier_load_score = []
     t.tic()
     for i in range(0, len(newloads)):
-        matchlist, matchindex, weight = find_ode(kpiMatrix, newload_ode.iloc[
-            i])  # check for all carriers, return a match list for matched carriers
+        newload=newloads.iloc[i]
+        new_ode=newload_ode.iloc[i]
+        matchlist,   weight = find_ode(kpiMatrix,new_ode)  # check for all carriers, return a match list for matched carriers
         for j in range(0, len(matchlist)):
-            score = similarity(matchlist[j].loads, newloads.iloc[i], weight[j])
+            score = similarity(matchlist[j].loads, newload, weight[j])
             carrier_load_score.append(score)
     results = pd.DataFrame(carrier_load_score).sort_values(by=['score'],ascending=False)
     datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1569,5 +1610,11 @@ def rec():
     carrierID = int(input('CarrierID:'))
     recommender(carrierID)
 
+def ecdf(data):
+    """Compute ECDF for a one-dimensional numpy array of measurements."""
+    recordsNumber = len(data)
+    x = np.sort(data)
+    y = np.arange(1, recordsNumber + 1) / recordsNumber
+    return x, y
 
 
