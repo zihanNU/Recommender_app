@@ -167,7 +167,8 @@ def Give_Carrier_Load_loading (CarrierID):
 	inner join Bazooka.dbo.[Load] L on O.LoadID = L.ID
 	inner join Bazooka.dbo.LoadCustomer LCUS on LCUS.LoadID = L.ID and LCUS.Main = 1
 	inner join (select entityid, SUM(amount) 'Cost' from Bazooka.dbo.LoadRateDetail 
-	where EntityType = 12 and EDIDataElementCode IN  ('405','FR',  'PM' ,'MN') and CreateDate > '2018-01-01' Group by entityid) LRD on LRD.entityid = lcus.id
+	where EntityType = 12 and EDIDataElementCode IN  ('405','FR',  'PM' ,'MN','SCL','OT','EXP') --and CreateDate > '2018-01-01' 
+	Group by entityid) LRD on LRD.entityid = lcus.id
 	--inner join #Cost C on C.LoadID=O.LoadID
 	where O.Carrierid=@CarrierID   and O.LoadDate between @CarrierDate1 and @CarrierDate2 and  
 	Ask>0 and LRD.Cost > 150 and  L.Mode = 1  and L.ProgressType>=7  
@@ -829,6 +830,8 @@ def Get_newload():
 	--convert(datetime, CONVERT(date, LSP.LoadByDate)) + convert(datetime, CONVERT(time, LSP.CloseTime))
 	--else LSP.[ScheduleCloseTime] end) 'pu_GAP',
     --CUS.name 'CustomerName'
+    L.OriginCityName + '-'+L.OriginStateCode 'origin',
+	L.DestinationCityName + '-'+L.DestinationStateCode 'destination',
     CityO.Longitude 'originLon',CityO.Latitude 'originLat',
 	CityD.Longitude 'destinationLon',CityD.Latitude 'destinationLat',
 	 RCO.ClusterNAME 'originCluster'
@@ -1341,7 +1344,8 @@ def similarity(loadlist, newload, weight):
         {'carrierID': load.carrierID, 'loadID': newload.loadID, 'similarity': sim, 'kpi': load.kpiScore,
          'rpm': load.rpm, 'miles': load.miles, 'customer_rate': load.customer_rate, 'weight': weight,
          'margin_perc':load.margin_perc,
-         'origin': newload.originCluster, 'dest': newload.destinationCluster, 'loaddate': newload.loaddate})
+         # 'origin': newload.originCluster, 'dest': newload.destinationCluster, 'loaddate': newload.loaddate
+         })
     carrier_scores_df = pd.DataFrame(carrier_scores)
     carrier_scores_df['sim_rank'] = carrier_scores_df['similarity'].rank(ascending=False)
     score_df = scoring(carrier_scores_df)
@@ -1368,8 +1372,9 @@ def scoring(carrier_scores_df):
     # score=sim_score*sim_score_weight+group_score*group_score_weight
     score = sim_score
     score_df = {'carrierID': int(carrier_info.carrierID), 'loadID': int(carrier_info.loadID),
-                'origin': carrier_info.origin, 'destination': carrier_info.dest,
-                'loaddate': carrier_info.loaddate, 'hist_perf': score, 'rpm': sim_rpm, 'margin_perc': sim_margin}
+                # 'origin': carrier_info.origin, 'destination': carrier_info.dest,
+                # 'loaddate': carrier_info.loaddate,
+                'hist_perf': score, 'rpm': sim_rpm, 'margin_perc': sim_margin}
 
     return score_df
 
@@ -1403,39 +1408,34 @@ def check(carrier,newloads):
     carrierID=int(carrier.carrierID)
     t.tic()
     carrier_load = Give_Carrier_Load_loading(carrierID)
+    corridor_info=pd.read_csv("corridor_margin.csv")
+    t.toc('load hist data')
     if carrier_load['flag']==1:
         loadList=carrier_load['histload']
         # loadList=  Carrier_Load_loading(1000)
         carrier_load_score=hist_recommender(carrier, newloads, loadList)
     else:
-        carrier_load_score=dyna_recommender(carrier,newloads)
+        carrier_load_score=dyna_recommender(carrier,newloads,corridor_info)
 
     return (carrier_load_score)
 
-def dyna_recommender(carrier,newloads):
+def dyna_recommender(carrier,newloads,corridor_info):
+### do not need any more, as the originDH etc dynamic info is calculated first seperated from hist performac score
+# margin and rpm and margin perc, needs to use all data from this corridor, no need to grab only from this carrier if this is a new carrier
     carrier_load_score=[]
     carrierID = int(carrier.carrierID)
     for i in range(0, len(newloads)):
         newload = newloads.iloc[i]
-        time_carrier = pd.Timestamp(carrier.EmptyDate)
-        time_load = pd.Timestamp(newload.pu_appt)
-        time_gap = time_load - time_carrier
+        rpm= corridor_info[corridor_info.corridor==newload.corridor].rpm
         score = {'carrierID': carrierID,
-             'loadID': int(newload.loadID),
-             'origin': newload.originCluster, 'destination': newload.destinationCluster,
-             'loaddate': newload.loaddate, 'hist_perf': 0, 'rpm': 0,
-             'expected_margin': 0,
-             'expected_margin%': 0,
-                 'margin_perc':0,
-             'originDH': geopy.distance.vincenty((newload.originLat, newload.originLon),
-                                                 (carrier.originLat, carrier.originLon)).miles,
-             'destDH': geopy.distance.vincenty(
-                 (newload.destinationLat, newload.destinationLon),(carrier.destLat, carrier.destLon)).miles,
-             'totalDH': float(geopy.distance.vincenty((newload.destinationLat, newload.destinationLon),
-                     (carrier.destLat, carrier.destLon)).miles) +
-                        float(geopy.distance.vincenty((newload.originLat, newload.originLon),
-                                                      (carrier.originLat, carrier.originLon)).miles),
-             'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
+             'loadID': newload.loadID,
+             # 'origin': newload.originCluster, 'destination': newload.destinationCluster,
+             # 'loaddate': newload.loaddate,
+                 'hist_perf': 0, 'rpm': rpm,
+                 'expected_margin': newload.customer_rate - rpm * (newload.miles + newload.originDH),
+                 'expected_margin%': 100 - rpm * (newload.miles + newload.originDH) / newload.customer_rate * 100,
+                 'margin_perc': corridor_info[corridor_info.corridor==newload.corridor].margin_perc
+             }
         carrier_load_score.append(score)
     return (carrier_load_score)
 
@@ -1478,43 +1478,22 @@ def hist_recommender(carrier,newloads,loadList):
         for j in range(0, len(matchlist)):
             score = similarity(matchlist[j].loads, newload, weight[j])
             ###This part is for dynamic info and verification'
-            score_update = {
-                'originDH': geopy.distance.vincenty((newload.originLat, newload.originLon),
-                                                    (carrier.originLat, carrier.originLon)).miles,
-                'destDH': geopy.distance.vincenty((newload.destinationLat, newload.destinationLon),
-                                                  (carrier.destLat, carrier.destLon)).miles,
-                'totalDH': float(geopy.distance.vincenty((newload.destinationLat, newload.destinationLon),
-                                          (carrier.destLat, carrier.destLon)).miles) +
-                           float(geopy.distance.vincenty((newload.originLat, newload.originLon),
-                                                         (carrier.originLat, carrier.originLon)).miles),
-                'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
             # 'kpi':newloads.iloc[i].kpiScore,
             #               'customer_rate':newloads.iloc[i].customer_rate,'carrier_rate':newloads.iloc[i].carrier_cost,
             #               'margin':newloads.iloc[i].customer_rate - newloads.iloc[i].carrier_cost}
-
-            score.update(score_update)
             ### End
             carrier_load_score.append(score)
         if len(matchlist) == 0:
             score = {'carrierID': carrierID,
                      'loadID': int(newload.loadID),
-                     'origin': newload.originCluster, 'destination': newload.destinationCluster,
-                     'loaddate': newload.loaddate, 'hist_perf': 0, 'rpm': pd.DataFrame.mean(loadList.rpm),
+                     # 'origin':  'destination': ,
+                     # 'corridor':newload.originCluster + newload.destinationCluster,
+                     # 'loaddate': newload.loaddate,
+                     'hist_perf': 0, 'rpm': pd.DataFrame.mean(loadList.rpm),
                      'expected_margin': newload.customer_rate - pd.DataFrame.mean(loadList.rpm) *
-                                        newload.miles,
-                     'expected_margin%': 1 - pd.DataFrame.mean(loadList.rpm) * newload.miles /newload.customer_rate,
-                     'margin_perc':pd.DataFrame.mean(loadList.margin_perc),
-                     'originDH': float(geopy.distance.vincenty((newload.originLat, newload.originLon),
-                                                         (carrier.originLat, carrier.originLon)).miles),
-                     'destDH': float(geopy.distance.vincenty(
-                         (newload.destinationLat, newload.destinationLon),
-                         (carrier.destLat, carrier.destLon)).miles),
-                     'totalDH':float(geopy.distance.vincenty(
-                         (newload.destinationLat, newload.destinationLon),
-                         (carrier.destLat, carrier.destLon)).miles) +
-                               float(geopy.distance.vincenty((newload.originLat, newload.originLon),
-                                                         (carrier.originLat, carrier.originLon)).miles),
-                     'puGAP': time_gap.days * 24 + time_gap.seconds / 3600}
+                                        (newload.miles+newload.originDH),
+                     'expected_margin%': 100 - pd.DataFrame.mean(loadList.rpm) * (newload.miles+newload.originDH)/newload.customer_rate*100,
+                     'margin_perc':pd.DataFrame.mean(loadList.margin_perc)}
             # carrier1 is a test
             # 'DH': newloads.iloc[i].originDH,
             # 'puGAP': newloads.iloc[i].pu_GAP, 'kpi': newloads.iloc[i].kpiScore,
@@ -1530,35 +1509,83 @@ def score_DH(DH,radius,penalty_radius):
     radius_DH=[i for i in DH if i<=radius]
     penalty_DH=[i for i in DH if i<=penalty_radius and i>=radius]
     score =np.array([100-stats.percentileofscore(radius_DH, i) for i in DH])
-    penalty =np.array([stats.percentileofscore(penalty_DH, i) for i in DH])
-    return  score - penalty
+    #penalty =np.array([stats.percentileofscore(penalty_DH, i) for i in DH])
+    return  score
 
+
+def pu_Gap(pu_appt,EmptyDate):
+    time_gap=pu_appt-EmptyDate
+    return time_gap.days * 24 + time_gap.seconds / 3600
 
 
 if __name__ == "__main__":
-    newloads= pd.read_csv("loaddata_0730.csv")
-    #newloads = Get_testload(carrierID)
-    carrierinfo=pd.read_csv("truck20180730.csv").iloc[0:1]
-    for carrier in carrierinfo.itertuples():
+    newloadsall_df= pd.read_csv("loadtest.csv")
+    #initialize 3 column features. if carrier put any info related to DH or puGap,we can update
+    newloadsall_df['originDH'] = 0
+    newloadsall_df['destDH'] = 0
+    newloadsall_df['puGap'] = 0
+    newloadsall_df['totalDH']= 0
+    #newloadsall = Get_testload(carrierID)
+    carrier_df=pd.read_csv("truck20180730.csv")
+    for carrier in carrier_df.itertuples():
+        # we may need to add a if condition, say if carrier put its lat and lon, and empty time.
+        newloads_df = newloadsall_df[
+            (newloadsall_df.value <= carrier.cargolimit) & (newloadsall_df.equipment == carrier.EquipmentType)]
+        newloads_update = {
+             'originDH': newloads_df.apply(lambda row: geopy.distance.vincenty((row.originLat, row.originLon), (
+                 carrier.originLat, carrier.originLon)).miles, axis=1),
+             'destDH': newloads_df.apply(lambda row: geopy.distance.vincenty(
+                                                           (row.destinationLat, row.destinationLon),
+                                                           (carrier.destLat, carrier.destLon)).miles , axis=1),
+              # 'totalDH': newloads.apply(lambda row: row.originDH + row.destDH, axis=1),
+             'puGap':newloads_df.apply(lambda row: pu_Gap(pd.Timestamp(row.pu_appt), pd.Timestamp(carrier.EmptyDate)),
+                                       axis=1)
+         }
+        newloads_df.update(pd.DataFrame(newloads_update))
+        newloads_df['totalDH'] = newloads_df.apply(lambda row: row.originDH + row.destDH, axis=1)
+        # newloads['originDH'] = newloads.apply(lambda row: geopy.distance.vincenty((row.originLat, row.originLon), (
+        #                                                  carrier.originLat, carrier.originLon)).miles, axis=1)
+        # newloads['destDH'] = newloads.apply(lambda row:  geopy.distance.vincenty(
+        #                                                  (row.destinationLat, row.destinationLon),
+        #                                                  (carrier.destLat, carrier.destLon)).miles , axis=1)
+        # newloads['totalDH'] = newloads.apply(lambda row: row.originDH+row.destDH,axis=1)
+        # newloads['puGAP'] = newloads.apply(lambda row: puGap(pd.Timestamp(row.pu_appt),pd.Timestamp(carrier.EmptyDate)), axis=1)
+        # newloads_df['originDH'] = newloads_df.apply(lambda row: geopy.distance.vincenty(
+        #                 (row.originLat, row.originLon), (carrier.originLat, carrier.originLon)).miles, axis=1).tolist()
+        # newloads_df['destDH']=newloads_df.apply(lambda row: geopy.distance.vincenty(
+        #             (row.destinationLat, row.destinationLon),(carrier.destLat, carrier.destLon)).miles, axis=1).tolist()
+        # newloadsall_df['puGap']=newloads_df.apply(lambda row: puGap(pd.Timestamp(row.pu_appt),
+        #                                                             pd.Timestamp(carrier.EmptyDate)), axis=1).tolist()
+
+        # newloads_df['totalDH'] = np.array(newloads_df['originDH'].tolist()) + np.array(newloads_df['destDH'].tolist())
+        # newloads_df.to_csv(
+        #     'carrier_all' + str(carrier.carrierID) + '_load_recommender' + datetime.datetime.now().strftime(
+        #         "%Y%m%d-%H%M%S") + '.csv',
+        #     index=False,)
         print (carrier.carrierID)
-        newloads_select = newloads[newloads.value <= carrier.cargolimit]
+        newloads_select = newloads_df [(newloads_df.originDH<250) & (newloads_df.totalDH<500)]
+        # 500 and 800 are the threshold radius of DH
         if len(newloads_select)>0:
             carrier_load_score=check(carrier,newloads_select)
-            if (len(carrier_load_score) > 0):
-                results = pd.DataFrame(carrier_load_score)
-                datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-                results['ODH_Score']=score_DH(results['originDH'].tolist(),200,500)
-                results['totalDH_Score'] = score_DH(results['totalDH'].tolist(), 300, 800)
-                results['total_Score'] = results['ODH_Score'] * 0.40 + results['totalDH_Score'] * 0.60 + results['hist_perf'] * 0.3
-
-                results.to_csv(
-                    'carrier' + str(carrier.carrierID) + '_load_recommender' + datetime.datetime.now().strftime(
-                        "%Y%m%d-%H%M%S") + '.csv',
-                    index=False,
-                    columns=['carrierID', 'loadID', 'loaddate', 'origin', 'destination', 'originDH', 'destDH',
-                             'totalDH',
-                             'puGAP',
-                             'expected_margin', 'expected_margin%','margin_perc', 'hist_perf','total_Score'])
+            # if (len(carrier_load_score) > 0):
+            results_df = pd.DataFrame(carrier_load_score).merge(newloads_df,left_on="loadID",right_on="loadID",how='inner')
+            #results_df.merge(newloads_df,left_on="loadID",right_on="loadID",how='inner')
+            results_df['ODH_Score']=score_DH(results_df['originDH'].tolist(),250,500)
+            results_df['totalDH']=  results_df['originDH'] +  results_df['destDH']
+            results_df['totalDH_Score'] = score_DH(results_df['totalDH'].tolist(), 500, 800)
+            results_df['puGap_Score'] = score_DH(results_df['puGap'].tolist(), 24, 36)
+            results_df['Score'] = results_df['ODH_Score'] * 0.40 + results_df['totalDH_Score'] * 0.60 + results_df['hist_perf'] * 0.3 \
+                               + results_df['expected_margin%']* 0.3 + results_df['puGap_Score']* 0.15
+            results_df['Score']= results_df['Score'] /max(results_df['Score'])*100
+            datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            results_df.to_csv(
+                'carrier' + str(carrier.carrierID) + '_load_recommender' + datetime.datetime.now().strftime(
+                    "%Y%m%d-%H%M%S") + '.csv',
+                index=False,
+                columns=['carrierID', 'loadID', 'loaddate', 'origin', 'destination', 'originDH', 'destDH',
+                         'totalDH',
+                         'puGap','ODH_Score','totalDH_Score',
+                         'expected_margin', 'expected_margin%','margin_perc', 'hist_perf','Score'])
 
 
 
