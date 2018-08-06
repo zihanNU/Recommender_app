@@ -49,6 +49,26 @@ class carrier_newload_score:
         self.loadid=loadid
         self.score=score
 
+
+def Get_truck(carrierID):
+    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSPROD;DATABASE=Bazooka;trusted_connection=true')
+    query= """
+    select 
+    carrierID,car.name,EmptyDate,EquipmentType,EquipmentLength,
+    OriginLatitude 'originLat',
+    OriginLongitude    'originLon',
+    DestinationLatitude   'destLat',
+    DestinationLongitude  'destLon',
+    car.cargolimit
+    from bazooka.dbo.Truck Tru
+     inner join bazooka.dbo.Carrier Car on Car.ID=Tru.CarrierID and Name not like 'UPS%'
+    where convert (date,EmptyDate)=convert(date,dateadd (day,1,GETDATE())) and OriginLongitude<0 and DestinationLongitude<0
+    and carrierID=?
+    """
+    trucks=pd.read_sql(query,cn,params= [carrierID])
+    return trucks
+
+
 #Give CarrierID
 def Give_Carrier_Load_loading (CarrierID):
     cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSPROD;DATABASE=Bazooka;trusted_connection=true')
@@ -1172,7 +1192,7 @@ def Get_newload():
     declare @date1 as date = getdate()
     declare @date2 as date = dateadd (day,1,getdate())
 
-    select L.Id  'loadID', convert (date,L.loaddate) 'loaddate',
+    select L.Id  'loadID', convert (date,L.loaddate) 'loaddate',l.TotalValue 'value',
     --LRD.Cost 'customer_rate', 
     L.totalrate 'customer_rate', 
     L.miles,
@@ -1212,7 +1232,7 @@ def Get_newload():
 	--				where EntityType = 12 and EDIDataElementCode IN  ('405','FR',  'PM' ,'MN','SCL','OT','EXP') --and CreateDate > '2018-01-01' 
 	--				Group by loadid) LRD on LRD.loadid = L.Id
    where 
-   L.StateType = 1 and L.progresstype=1 and LRD.Cost>100
+   L.StateType = 1 and L.progresstype=1 and L.totalrate>150
     and  L.LoadDate between @Date1 and @Date2  and L.Miles>0 and L.division between 1 and 2
     AND L.Mode = 1  
     --AND LCAR.CarrierID=@CarrierID
@@ -1763,8 +1783,18 @@ def scoring(carrier_scores_df):
 #         # Now create the Student instance and append it to the list.
 #         loadList.append(Load(Id,carrierId,KPIScore,originDH,originDHLevels,PUGap,originCluster,destinationCluster,equipment,corridorVolume,oriCount,destCount,customerCount,customerAll,customerSize))
 
+def check(carrier_load,newloads):
+    if carrier_load['flag']==1:
+        loadList=carrier_load['histload']
+        loadList.to_csv('carrier' + str(carrier.carrierID) + 'histload.csv',index=False)
+        # loadList=  Carrier_Load_loading(1000)
+        carrier_load_score=hist_recommender(carrier, newloads, loadList)
+    else:
+        carrier_load_score=dyna_recommender(carrier,newloads,corridor_info)
 
-def check(carrier,newloads):
+    return (carrier_load_score)
+
+def check_multicarrier(carrier,newloads):
     t = TicToc()
     carrierID=int(carrier.carrierID)
     t.tic()
@@ -1788,15 +1818,15 @@ def dyna_recommender(carrier,newloads,corridor_info):
     carrierID = int(carrier.carrierID)
     for i in range(0, len(newloads)):
         newload = newloads.iloc[i]
-        rpm= corridor_info[corridor_info.corridor==newload.corridor].rpm
+        rpm= float(corridor_info[corridor_info.corridor==newload.corridor].rpm.values)
         score = {'carrierID': carrierID,
              'loadID': newload.loadID,
              # 'origin': newload.originCluster, 'destination': newload.destinationCluster,
              # 'loaddate': newload.loaddate,
                  'hist_perf': 0, 'rpm': rpm,
                  'expected_margin': newload.customer_rate - rpm * (newload.miles + newload.originDH),
-                 'expected_margin%': corridor_info[corridor_info.corridor==newload.corridor].Avg_margin_perc,
-                 'margin_perc': corridor_info[corridor_info.corridor==newload.corridor].Avg_margin_perc
+                 'expected_margin%': float(corridor_info[corridor_info.corridor==newload.corridor].corrdor_margin_perc.values),
+                 'margin_perc': float(corridor_info[corridor_info.corridor==newload.corridor].corrdor_margin_perc.values)
              }
         carrier_load_score.append(score)
     return (carrier_load_score)
@@ -1929,9 +1959,10 @@ def reasoning(results_df):
 
 def api_json(results_df):
     api_resultes=results_df[['loadID','Reason','Score']]
+
     api_resultes.name='Loads'
     api_resultes=api_resultes.to_json(orient='index')
-    with open('json_results.json', 'w') as f:
+    with open( str(carrier.carrierID) +'json_results.json', 'w') as f:
         f.write(api_resultes)
     results_df.to_csv(
         'carrier' + str(carrier.carrierID) + '_load_recommender' + datetime.datetime.now().strftime(
@@ -1945,16 +1976,24 @@ def api_json(results_df):
 
 
 
-if __name__ == "__main__":
-    carrier_df=pd.read_csv("truck20180730.csv").loc[0:1]    # read dynamic input, e.g. location, empty date. etc.
-    corridor_info = pd.read_csv("corridor_margin.csv")
 
-    newloadsall_df= pd.read_csv("loadtest.csv")
+if __name__ == "__main__":
+    #carrier_df=pd_read_json     # read dynamic input, e.g. location, empty date. etc.
+    carrierID = int(input('CarrierID:'))
+    #carrierID=   api input carrierID
+    #carrier_df = pd.read_csv("truck20180807.csv")
+    carrier_df = Get_truck(carrierID)
+    corridor_info = pd.read_csv("corridor_margin.csv")   #should be saved somewhere
+    t=TicToc()
+    t.tic()
+    carrier_load = Give_Carrier_Load_loading(carrierID)
+    newloadsall_df= Get_newload()   # if any date will be put in, change the variables.
     #initialize 3 column features. if carrier put any info related to DH or puGap,we can update
     newloadsall_df['originDH'] = 0
     newloadsall_df['destDH'] = 0
     newloadsall_df['puGap'] = 0
     newloadsall_df['totalDH']= 0
+    t.toc('loading')
     #newloadsall = Get_testload(carrierID)
     #newloadsall_df['corrdor_margin'] = [corridor_info[corridor_info.corridor == row.corridor]['Avg_margin_perc'] for row in newloadsall_df.itertuples()]
     #newloadsall_df['corrdor_margin']= newloadsall_df.apply(lambda row: corridor_info[corridor_info.corridor==row.corridor].Avg_margin_perc)
@@ -1965,10 +2004,10 @@ if __name__ == "__main__":
         if carrier.originLat:
             newloads_df= dynamic_input(newloads_df,carrier)
         print (carrier.carrierID)
-        newloads_select = newloads_df [(newloads_df.originDH<250) & (newloads_df.totalDH<500)]
+        newloads_select = newloads_df [(newloads_df.originDH<250) & (newloads_df.totalDH<500) & (newloads_df.puGap<48)]
         # 500 and 800 are the threshold radius of DH
         if len(newloads_select)>0:
-            carrier_load_score=check(carrier,newloads_select)
+            carrier_load_score=check(carrier_load,newloads_select)
             # if (len(carrier_load_score) > 0):
             results_df = pd.DataFrame(carrier_load_score).merge(newloads_df,left_on="loadID",right_on="loadID",how='inner')
             results_df=results_df.merge(corridor_info,left_on = 'corridor', right_on='corridor',how='left')
@@ -1994,57 +2033,50 @@ if __name__ == "__main__":
 
 
 
-def recommender(carrierID):
-    t = TicToc()
-    t.tic()
-    newloads = Get_newload()
-    newload_ode = get_odelist_new(newloads)
-    t.toc('newload')
 
-    t.tic()
-    loadList = Give_Carrier_Load_loading(carrierID)
-    # loadList = Carrier_Load_loading(10)
-
-    carriers = sorted(set(loadList.carrierID.tolist()))
-    histode = get_odelist_hist(loadList)
-    # odelist = set(histode)   # set is not useful for the object list
-    odelist = histode.drop_duplicates(subset=['origin', 'destination', 'equipment'])
-
-    # histod=set(loadList.corridor.tolist())
-    ##a=loadList.originCluster.tolist()
-    ##b=loadList.destinationCluster.tolist()
-
-    kpiMatrix = makeMatrix(loadList, odelist, carriers)
-    t.toc('histload_matrix')
-
-    carrier_load_score = []
-    t.tic()
-    for i in range(0, len(newloads)):
-        newload=newloads.iloc[i]
-        new_ode=newload_ode.iloc[i]
-        matchlist,   weight = find_ode(kpiMatrix,new_ode)  # check for all carriers, return a match list for matched carriers
-        for j in range(0, len(matchlist)):
-            score = similarity(matchlist[j].loads, newload, weight[j])
-            carrier_load_score.append(score)
-    results = pd.DataFrame(carrier_load_score).sort_values(by=['score'],ascending=False)
-    datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    results.to_csv(
-        'carrier' + str(carrierID) + '_load_recommender' + datetime.datetime.now().strftime("%Y%m%d-%H%M") + '.csv',
-        index=False,
-        columns=['carrierID', 'loadID', 'origin', 'destination','loaddate', 'score','expected_margin','expected_margin%'])
-    t.toc('scores')
-    return (0)
-
-def rec():
+def recom_by_mutilcarriers():
 #if __name__ == "__main__":
-    carrierID = int(input('CarrierID:'))
-    recommender(carrierID)
+    carrier_df=pd.read_csv("truck20180730.csv").loc[0:1]    # read dynamic input, e.g. location, empty date. etc.
+    corridor_info = pd.read_csv("corridor_margin.csv")
 
-def ecdf(data):
-    """Compute ECDF for a one-dimensional numpy array of measurements."""
-    recordsNumber = len(data)
-    x = np.sort(data)
-    y = np.arange(1, recordsNumber + 1) / recordsNumber
-    return x, y
+    newloadsall_df= pd.read_csv("loadtest.csv")
+    #initialize 3 column features. if carrier put any info related to DH or puGap,we can update
+    newloadsall_df['originDH'] = 0
+    newloadsall_df['destDH'] = 0
+    newloadsall_df['puGap'] = 0
+    newloadsall_df['totalDH']= 0
+    #newloadsall = Get_testload(carrierID)
+    #newloadsall_df['corrdor_margin'] = [corridor_info[corridor_info.corridor == row.corridor]['Avg_margin_perc'] for row in newloadsall_df.itertuples()]
+    #newloadsall_df['corrdor_margin']= newloadsall_df.apply(lambda row: corridor_info[corridor_info.corridor==row.corridor].Avg_margin_perc)
+    for carrier in carrier_df.itertuples():
+        newloads_df = newloadsall_df[
+            (newloadsall_df.value <= carrier.cargolimit) & (newloadsall_df.equipment == carrier.EquipmentType)]
+        # need dynamic check: if equipment type is an entry, etc.
+        if carrier.originLat:
+            newloads_df= dynamic_input(newloads_df,carrier)
+        print (carrier.carrierID)
+        newloads_select = newloads_df [(newloads_df.originDH<250) & (newloads_df.totalDH<500)]
+        # 500 and 800 are the threshold radius of DH
+        if len(newloads_select)>0:
+            carrier_load_score=check_multicarrier(carrier,newloads_select)
+            # if (len(carrier_load_score) > 0):
+            results_df = pd.DataFrame(carrier_load_score).merge(newloads_df,left_on="loadID",right_on="loadID",how='inner')
+            results_df=results_df.merge(corridor_info,left_on = 'corridor', right_on='corridor',how='left')
+            results_df['corrdor_margin_perc'].fillna(0, inplace=True)
+            #results_df.merge(newloads_df,left_on="loadID",right_on="loadID",how='inner')
+            results_df['ODH_Score']=score_DH(results_df['originDH'].tolist(),250 )
+            results_df['totalDH']=  results_df['originDH'] +  results_df['destDH']
+            results_df['totalDH_Score'] = score_DH(results_df['totalDH'].tolist(), 500 )
+            results_df['puGap_Score'] = score_DH(results_df['puGap'].tolist(), 36)
+            results_df['margin_Score'] =  results_df['expected_margin%']*0.5+ results_df['margin_perc']*0.5 \
+                                          -  results_df['corrdor_margin_perc']
+            #margin score needs to be verified
+            results_df['Score'] = results_df['ODH_Score'] * 0.25 + results_df['totalDH_Score'] * 0.20 + results_df['hist_perf'] * 0.30 \
+                               + results_df['margin_Score']* 0.20 + results_df['puGap_Score']* 0.05
+            results_df['Reason']=reasoning(results_df)
+            api_json(results_df)
+            #results_df['Score']= results_df['Score']/200*100
+            #datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            #results_df['Reason']=results_df.apply (lambda row: )
 
 
