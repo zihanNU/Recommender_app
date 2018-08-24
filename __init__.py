@@ -1395,8 +1395,8 @@ def similarity(loadlist, newload, weight):
                                            (load.originLat, load.originLon)).miles
         destination_dist = geopy.distance.vincenty((newload.destinationLat, newload.destinationLon),
                                                    (load.destinationLat, load.destinationLon)).miles
-        histload_feature = [ori_dist, destination_dist, load.industryID]
-        newload_feature = [0.01, 0.01, newload.industryID]
+        histload_feature = [ori_dist, destination_dist, load.industryID,load.miles/10]
+        newload_feature = [0.01, 0.01, newload.industryID, newload.miles/10]
         sim = 1 - spatial.distance.cosine(histload_feature, newload_feature)
 
         ##        histload_feature=[ori_dist,destination_dist ]
