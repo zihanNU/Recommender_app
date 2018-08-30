@@ -191,18 +191,6 @@ def Get_Carrier_histLoad (CarrierID,date1,date2):
 	where O.Carrierid=@CarrierID   and O.LoadDate between @CarrierDate1 and @CarrierDate2 and  
 	Ask>0 and L.totalrate > 150 and  L.Mode = 1  and L.ProgressType>=7  and L.Miles>0
  
-
-	If(OBJECT_ID('tempdb..#Carrier_CustID') Is Not Null)
-	Begin
-	Drop Table #Carrier_CustID
-	End
-	Create Table #Carrier_CustID (LoadID int,  CustID int)
-	Insert into #Carrier_CustID
-	select COALESCE(B.LoadID,O.LoadID)   'LoadID',
-	CustomerID
-	from #Bounce  B
-	full join #Offer O on B.LoadID=O.LoadID and B.CarrierID=O.CarrierID
-	inner join bazooka.dbo.LoadCustomer LCUS on LCUS.LoadID = COALESCE(B.LoadID,O.LoadID) 
 	---End of Load-Carrier KPI Score
 
 
@@ -716,69 +704,69 @@ def recommender( carrier_load,trucks_df):
 
     ##initialization of the final results
     results_sort_df = pd.DataFrame(columns=['loadID', 'Reason', 'Score'])
-    result_json = {'Loads': [results_sort_df], "ver": "TruckNorris.0.1.18208.04"}
-    for carrier in trucks_df.itertuples():
-        newloadsall_df = Get_newload(date1_default,date2_default)
-         ### should deal with if equipmenttype is a string carrier['EquipmentType'].fillna('', inplace=True)
-        ###This part is for new api input
-        
-        # if any date will be put in, change the variables.
-        # if date1 is not None and date2 is not None:
-        #     Get_newload(date1,date2)
-        # elif date2 is None:
-        #     date2=date1 + 1
-        #     Get_newload(date1,date2)
-        # else:
-        #     Get_newload()
+    result_json = {'Loads': []}
+    carrier = trucks_df.iloc[0]
+    newloadsall_df = Get_newload(date1_default,date2_default)
+     ### should deal with if equipmenttype is a string carrier['EquipmentType'].fillna('', inplace=True)
+    ###This part is for new api input
 
-        newloads_df = newloadsall_df[(newloadsall_df.value <= float(carrier.cargolimit))
-                                     & [carrier.EquipmentType in equip for equip in newloadsall_df.equipment]
-                                     & (newloadsall_df.equipmentlength <= float(carrier.EquipmentLength))]
-        # newloads_df = newloadsall_df[
-        #     (newloadsall_df.value <= carrier.cargolimit) & (newloadsall_df.equipment == carrier.EquipmentType)]
-        originRadius = originDH_default if carrier.originDeadHead_radius == 0 else float(carrier.originDeadHead_radius)
-        destRadius = destDH_default if carrier.destinationDeadHead_radius == 0 else float(carrier.destinationDeadHead_radius)
+    # if any date will be put in, change the variables.
+    # if date1 is not None and date2 is not None:
+    #     Get_newload(date1,date2)
+    # elif date2 is None:
+    #     date2=date1 + 1
+    #     Get_newload(date1,date2)
+    # else:
+    #     Get_newload()
 
-        # initialize 3 column features. if carrier put any info related to DH or puGap,we can update
-        newloads_df['originDH'] = originRadius
-        newloads_df['destDH'] = destRadius
-        newloads_df['puGap'] = gap_default
-        newloads_df['totalDH'] = originRadius+destRadius
+    newloads_df = newloadsall_df[(newloadsall_df.value <= float(carrier.cargolimit))
+                                 & [carrier.EquipmentType in equip for equip in newloadsall_df.equipment]
+                                 & (newloadsall_df.equipmentlength <= float(carrier.EquipmentLength))]
+    # newloads_df = newloadsall_df[
+    #     (newloadsall_df.value <= carrier.cargolimit) & (newloadsall_df.equipment == carrier.EquipmentType)]
+    originRadius = originDH_default if carrier.originDeadHead_radius == 0 else float(carrier.originDeadHead_radius)
+    destRadius = destDH_default if carrier.destinationDeadHead_radius == 0 else float(carrier.destinationDeadHead_radius)
 
-        # need dynamic check: if equipment type is an entry, etc.
-        if len(newloads_df) > 0:
-            newloads_df = dynamic_input(newloads_df, carrier)
+    # initialize 3 column features. if carrier put any info related to DH or puGap,we can update
+    newloads_df['originDH'] = originRadius
+    newloads_df['destDH'] = destRadius
+    newloads_df['puGap'] = gap_default
+    newloads_df['totalDH'] = originRadius+destRadius
 
-            # need to change, if not null for origin, update origin; if not null for dest, update dest,
-            # if not null for date, select date from to.
-            #print(carrier.carrierID)
+    # need dynamic check: if equipment type is an entry, etc.
+    if len(newloads_df) > 0:
+        newloads_df = dynamic_input(newloads_df, carrier)
 
-            newloads_select = newloads_df[
-                (newloads_df.originDH <= originRadius) | (newloads_df.totalDH <= (originRadius+destRadius)) & (newloads_df.puGap <= gap_default)]
+        # need to change, if not null for origin, update origin; if not null for dest, update dest,
+        # if not null for date, select date from to.
+        #print(carrier.carrierID)
 
-            if len(newloads_select) > 0:
-                carrier_load_score = check(carrier_load, newloads_select,carrier,corridor_info)
-                # if (len(carrier_load_score) > 0):
-                results_df = pd.DataFrame(carrier_load_score).merge(newloads_select, left_on="loadID", right_on="loadID",
-                                                                    how='inner')
-                results_df = results_df.merge(corridor_info, left_on='corridor', right_on='corridor', how='left')
-                results_df['corrdor_margin_perc'].fillna(0, inplace=True)
-                # results_df.merge(newloads_df,left_on="loadID",right_on="loadID",how='inner')
-                results_df['ODH_Score'] = score_DH(results_df['originDH'].tolist(), originDH_default)
-                results_df['totalDH'] = results_df['originDH'] + results_df['destDH']
-                results_df['totalDH_Score'] = score_DH(results_df['totalDH'].tolist(), (originDH_default + destDH_default))
-                results_df['puGap_Score'] = score_DH(abs(results_df['puGap']).tolist(),gap_default )
-                results_df['margin_Score'] = results_df['estimated_margin%'] * 0.3 + results_df['margin_perc'] * 0.7 \
-                                             - results_df['corrdor_margin_perc']
-                # margin score needs to be verified
-                results_df['Score'] = results_df['ODH_Score'] * 0.25 + results_df['totalDH_Score'] * 0.20 + \
-                                      results_df['hist_perf'] * 0.30  + results_df['margin_Score'] * 0.10 + \
-                                      results_df['puGap_Score'] * 0.05 + results_df['desired_OD'] * 0.1
-                results_df['Reason'] = reasoning(results_df)
-                results_sort_df = results_df[results_df.Score > 0].sort_values(by=['Score'], ascending= False)
-                 
-                result_json=api_json_output(results_sort_df,carrier.carrierID)
-                #print ('test')
+        newloads_select = newloads_df[
+            (newloads_df.originDH <= originRadius) | (newloads_df.totalDH <= (originRadius+destRadius)) & (newloads_df.puGap <= gap_default)]
+
+        if len(newloads_select) > 0:
+            carrier_load_score = check(carrier_load, newloads_select,carrier,corridor_info)
+            # if (len(carrier_load_score) > 0):
+            results_df = pd.DataFrame(carrier_load_score).merge(newloads_select, left_on="loadID", right_on="loadID",
+                                                                how='inner')
+            results_df = results_df.merge(corridor_info, left_on='corridor', right_on='corridor', how='left')
+            results_df['corrdor_margin_perc'].fillna(0, inplace=True)
+            # results_df.merge(newloads_df,left_on="loadID",right_on="loadID",how='inner')
+            results_df['ODH_Score'] = score_DH(results_df['originDH'].tolist(), originDH_default)
+            results_df['totalDH'] = results_df['originDH'] + results_df['destDH']
+            results_df['totalDH_Score'] = score_DH(results_df['totalDH'].tolist(), (originDH_default + destDH_default))
+            results_df['puGap_Score'] = score_DH(abs(results_df['puGap']).tolist(),gap_default )
+            results_df['margin_Score'] = results_df['estimated_margin%'] * 0.3 + results_df['margin_perc'] * 0.7 \
+                                         - results_df['corrdor_margin_perc']
+            # margin score needs to be verified
+            results_df['Score'] = results_df['ODH_Score'] * 0.25 + results_df['totalDH_Score'] * 0.20 + \
+                                  results_df['hist_perf'] * 0.30  + results_df['margin_Score'] * 0.10 + \
+                                  results_df['puGap_Score'] * 0.05 + results_df['desired_OD'] * 0.1
+            results_df['Reason'] = reasoning(results_df)
+            results_sort_df = results_df[results_df.Score > 0].sort_values(by=['Score'], ascending= False)
+
+            result_json=api_json_output(results_sort_df,carrier.carrierID)
+            #print ('test')
     return result_json
 
 
@@ -800,7 +788,7 @@ def search():
     truck_input = request.args.to_dict()
     truck.update(truck_input)
     truck['cargolimit'] = Get_truckinsurance(truck['carrierID'])
-    carrier_load = Get_Carrier_histLoad(truck['carrierID'],(datetime.timedelta(-366-7) + now).strftime("%Y-%m-%d"),
+    carrier_load = Get_Carrier_histLoad(truck['carrierID'],(datetime.timedelta(-90-7) + now).strftime("%Y-%m-%d"),
                                         (datetime.timedelta(-7) + now).strftime("%Y-%m-%d"))
 
     carriers = []
