@@ -687,11 +687,23 @@ def api_json_output(results_df,carrierID):
 ##                 'totalDH', 'margin_perc', 'estimated_margin', 'corrdor_margin_perc', 'estimated_margin%',
 ##                 'puGap', 'ODH_Score', 'totalDH_Score', 'puGap_Score',
 ##                 'margin_Score', 'hist_perf', 'Score', 'Reason'])
+    # for i in api_resultes_df.index:
+    #     load=api_resultes_df.loc[i]
+    #     #api_resultes_df.loc[i].to_json("row{}.json".format(i))
+    #     load_json=load.to_json()
+    #     loads.append(load_json)
+
     for i in api_resultes_df.index:
-        load=api_resultes_df.loc[i]
-        #api_resultes_df.loc[i].to_json("row{}.json".format(i))
-        load_json=load.to_json()
-        loads.append(load_json)
+        load = api_resultes_df.loc[i]
+
+        _loadid = load["loadID"].item()
+        _reason = load["Reason"]
+        _score = load["Score"].item()
+        loads.append({
+            "loadid": _loadid,
+            "Reason": _reason,
+            "Score": _score
+        })
     return loads
 
 def recommender( carrier_load,trucks_df):
@@ -703,8 +715,9 @@ def recommender( carrier_load,trucks_df):
     corridor_info = pd.read_csv("corridor_margin.csv")  # should be saved somewhere
 
     ##initialization of the final results
-    results_sort_df = pd.DataFrame(columns=['loadID', 'Reason', 'Score'])
+    #results_sort_df = pd.DataFrame(columns=['loadID', 'Reason', 'Score'])
     result_json = {'Loads': []}
+
     carrier = trucks_df.iloc[0]
     newloadsall_df = Get_newload(date1_default,date2_default)
      ### should deal with if equipmenttype is a string carrier['EquipmentType'].fillna('', inplace=True)
