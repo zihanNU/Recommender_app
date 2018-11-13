@@ -338,8 +338,7 @@ def Get_Carrier_histLoad (CarrierID,date1,date2):
     return {'flag':1,'histload':histload}
 
 def Get_newload(date1,date2):
-    #cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;trusted_connection=true')
-    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSPROD;DATABASE=Bazooka;trusted_connection=true')
+    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;trusted_connection=true')
     query="""
     declare @date1 as date = ?
     declare @date2 as date = ?
