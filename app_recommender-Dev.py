@@ -77,6 +77,8 @@ def Get_Carrier_histLoad (CarrierID,date1,date2):
 	"""
 
     histload=pd.read_sql(query,cn,params= [CarrierID,date1,date2 ])
+
+
     if (len(histload)==0):
         return {'flag':0,'histload':0}
     #histload['corridor_max']=max(histload.corridor_count)
@@ -84,7 +86,7 @@ def Get_Carrier_histLoad (CarrierID,date1,date2):
     histload['dest_max']=max(histload.dest_count)
     return {'flag':1,'histload':histload}
 
-def Get_newload1(date1,date2):
+def Get_newload_old(date1,date2):
     #cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;trusted_connection=true')
     cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;uid=BazookaAccess;pwd=C@y0te')
     #cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSPROD;DATABASE=Bazooka;trusted_connection=true')
@@ -170,11 +172,11 @@ def Get_newload(date1,date2):
 	select
 	L.Id  'loadID'
 
-
 	from Bazooka.dbo.[load] L
 	INNER JOIN @St SO ON SO.Code = L.OriginStateCode
         INNER JOIN @St SD ON SD.Code = L.DestinationStateCode
-	where L.StateType = 1 and L.progresstype=1 and L.totalrate>150
+	where 	 
+	L.StateType = 1 and L.progresstype=1 and L.totalrate>150
     and  L.LoadDate between @Date1 and @Date2  and L.Miles>0 and L.division in (1, 2)
     AND L.Mode = 1  
     AND L.ShipmentType not in (3,4,6,7)
@@ -463,7 +465,6 @@ def dynamic_input(newloads_df,carrier):
     if  carrier.originLat is not None and carrier.originLon is not None:
          newloads_ODH= {'originDH': newloads_df.apply(lambda row: geopy.distance.vincenty((row.originLat, row.originLon), (
              float(carrier.originLat), float(carrier.originLon))).miles, axis=1)}
-
          newloads_df.update(pd.DataFrame(newloads_ODH))
     if  carrier.destLat is not None and carrier.destLon is not None:
          newloads_DDH= {'destDH': newloads_df.apply(lambda row: geopy.distance.vincenty((row.originLat, row.originLon), (
@@ -490,9 +491,10 @@ def reasoning(results_df):
         reasons.append ( reason_label[scores.index(max(scores))])
     return reasons
 
-def api_json_output(results_df):
-    results_df['Score'] = results_df['Score'].apply(np.int)
-    api_resultes_df = results_df[['loadID', 'Reason', 'Score']]
+def api_json_output(api_resultes_df):
+    api_resultes_df.to_csv("test.csv")
+    api_resultes_df['Score'] = api_resultes_df['Score'].apply(np.int)
+    #api_resultes_df = results_df[['loadID', 'Reason', 'Score']]
     loads=[]
     #print (results_json)
 ##    results_df.to_csv(
@@ -555,9 +557,22 @@ def recommender( carrier_load,trucks_df):
     # else:
     #     Get_newload()
 
+
     newloads_df = newloadsall_df[(newloadsall_df.value <= float(carrier.cargolimit))
                                  & [carrier.EquipmentType in equip for equip in newloadsall_df.equipment]
                                  & (newloadsall_df.equipmentlength <= float(carrier.EquipmentLength))]
+
+
+## add a condition to filter the corridors that this carrier is interested in in the history
+## will extend this ode with search history and DOT inspection data
+    if carrier.originLat is None or carrier.originLon is None:
+         if carrier_load['flag'] == 1:
+             #loadList_ode = carrier_load['histload']['corridor'].tolist()
+             origins = carrier_load['histload']['originCluster'].tolist()
+             newloads_df = newloads_df[ newloads_df['originCluster'].isin(origins) ]
+            #newloads_df = newloads_df[ (newloads_df['corridor'].isin(loadList_ode)) or (newloads_df['originCluster'].isin(origins))]
+### End
+
     t.toc('newload')
     # newloads_df = newloadsall_df[
     #     (newloadsall_df.value <= carrier.cargolimit) & (newloadsall_df.equipment == carrier.EquipmentType)]
@@ -607,7 +622,7 @@ def recommender( carrier_load,trucks_df):
             results_df['Reason'] = reasoning(results_df)
             results_sort_df = results_df[results_df.Score > 0].sort_values(by=['Score'], ascending= False)
             t.tic()
-            result_json=api_json_output(results_sort_df)
+            result_json=api_json_output(results_sort_df[['loadID', 'Reason', 'Score']])
             t.toc('output')
 
     return result_json
