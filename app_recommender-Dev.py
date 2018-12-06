@@ -29,6 +29,19 @@ class carrier_ode_loads_kpi_std:   # ode here is a pd.df with 4 features, o, d, 
         self.kpi=kpi
         self.std=std
 
+def Get_truckSearch(carrierID):
+    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSDev;DATABASE=ResearchScience;trusted_connection=true')
+    sql = """
+           select 
+            carrierID, originCluster, destinationCluster
+    		 from
+            [ResearchScience].[dbo].[Recommendation_Trucks] 
+            where carrierID=?
+            """
+    truck = pd.read_sql(sql=sql, con=cn, params=[carrierID])
+    trucks_df=truck.drop_duplicates()
+    return trucks_df
+
 
 def Get_truckinsurance(carrierID):
     cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSPROD;DATABASE=Bazooka;trusted_connection=true')
@@ -40,6 +53,7 @@ def Get_truckinsurance(carrierID):
         where Car.ID=?
         """
     truck=pd.read_sql(query,cn,params= [carrierID])
+
     return truck.cargolimit.tolist()[0]
 
 def Get_truck(carrierID):
@@ -64,19 +78,21 @@ def Get_truck(carrierID):
     return trucks
 
 #Give CarrierID
-def Get_Carrier_histLoad (CarrierID,date1,date2):
+def Get_Carrier_histLoad (CarrierID ):
+    #date1 = (datetime.timedelta(-90 - 7) + now).strftime("%Y-%m-%d")
+    #date2 = (datetime.timedelta(-7) + now).strftime("%Y-%m-%d")
     cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSDev;DATABASE=ResearchScience;trusted_connection=true')
     query= """
         set nocount on
         declare @CarrierID as int =?   
-        declare @date1 as date = ?
-        declare @date2 as date =?
+        declare @date1 as date = dateadd(day,-97,getdate())
+        declare @date2 as date = dateadd(day,-07,getdate())
         select * from [ResearchScience].[dbo].[Recommendation_HistLoads]
         where CarrierID= @CarrierID  
         and loaddate between @date1 and @date2
 	"""
 
-    histload=pd.read_sql(query,cn,params= [CarrierID,date1,date2 ])
+    histload=pd.read_sql(query,cn,params= [CarrierID ])
 
 
     if (len(histload)==0):
@@ -88,7 +104,7 @@ def Get_Carrier_histLoad (CarrierID,date1,date2):
 
 def Get_newload_old(date1,date2):
     #cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;trusted_connection=true')
-    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;uid=BazookaAccess;pwd=C@y0te')
+    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=BazookaStaging;DATABASE=Bazooka;uid=BazookaAccess;pwd=C@y0te')
     #cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSPROD;DATABASE=Bazooka;trusted_connection=true')
     query="""
     SET NOCOUNT ON
@@ -150,73 +166,33 @@ def Get_newload_old(date1,date2):
 
     return (newload)
 
-def Get_newload(date1,date2):
-    #cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;trusted_connection=true')
-    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;uid=BazookaAccess;pwd=C@y0te')
-    #cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSPROD;DATABASE=Bazooka;trusted_connection=true')
-    query="""
-    SET NOCOUNT ON
-    declare @date1 as date = ?
-    declare @date2 as date = ?
-
-    DECLARE @St AS TABLE (Code VARCHAR(50))
-    INSERT INTO @St( Code )
-    select [Code]  FROM [Bazooka].[dbo].[State] where [ID]<=51
-
-	If(OBJECT_ID('tempdb.. #loadID') Is Not Null)
-	Begin
-	Drop Table  #loadID
-	End
-	create table #loadID (loadID int)
-	insert into #loadID
-	select
-	L.Id  'loadID'
-
-	from Bazooka.dbo.[load] L
-	INNER JOIN @St SO ON SO.Code = L.OriginStateCode
-        INNER JOIN @St SD ON SD.Code = L.DestinationStateCode
-	where 	 
-	L.StateType = 1 and L.progresstype=1 and L.totalrate>150
-    and  L.LoadDate between @Date1 and @Date2  and L.Miles>0 and L.division in (1, 2)
-    AND L.Mode = 1  
-    AND L.ShipmentType not in (3,4,6,7)
- 
-
-    select L.Id  'loadID', convert (date,L.loaddate) 'loaddate',l.TotalValue 'value',
-    L.totalrate 'customer_rate', L.EquipmentType 'equipment',
-    L.equipmentlength,
-    L.miles,
-	(case when LSP.[ScheduleCloseTime] = '1753-01-01' then 
-	convert(datetime, CONVERT(date, LSP.LoadByDate)) + convert(datetime, CONVERT(time, LSP.CloseTime)) 
-	else LSP.[ScheduleCloseTime] end) 'pu_appt',
-    L.OriginCityName + '-'+L.OriginStateCode 'origin',
-	L.DestinationCityName + '-'+L.DestinationStateCode 'destination',
-    CityO.Longitude 'originLon',CityO.Latitude 'originLat',
-	CityD.Longitude 'destinationLon',CityD.Latitude 'destinationLat',
-	 RCO.ClusterNAME 'originCluster'
-	,RCD.ClusterName 'destinationCluster'
-    ,RCO.ClusterNAME+'-'+RCD.ClusterName 'corridor'
-	,COALESCE(C.DandBIndustryId,0)  'industryID', 
-	COALESCE(D.Code,'unknown') 'industry'
-    from #loadID ID
-	inner join bazooka.dbo.load L on ID.loadID = l.id
-    inner join bazooka.dbo.LoadCustomer LCUS on L.id=LCUS.LoadID AND LCUS.Main = 1
-	INNER JOIN Bazooka.dbo.Customer CUS ON LCUS.CustomerID = CUS.ID
-	LEFT JOIN Bazooka.dbo.Customer PCUS ON CUS.ParentCustomerID = PCUS.ID
-    inner join bazooka.dbo.loadstop LSP on LSP.id=L.OriginLoadStopID
-    inner join bazooka.dbo.City CityO on CityO.id=l.origincityid --LSP.CityID
-    inner join bazooka.dbo.City CityD on CityD.id=l.destinationcityid --.CityID
-	LEFT JOIN Analytics.CTM.RateClusters RCO ON RCO.BazookaCityId = CityO.ID
-    LEFT JOIN Analytics.CTM.RateClusters RCD ON RCD.BazookaCityId = CityD.ID
-	left join bazooka.dbo.CustomerRelationshipManagement  C on C.CustomerID=LCUS.CustomerID
-	left join bazooka.dbo.DandBIndustry D  on C.DandBIndustryId=D.DandBIndustryId
-   where 
-	CUS.Name not like 'UPS%'
-	AND --COALESCE(PCUS.CODE,CUS.CODE) NOT IN ('UPSAMZGA','UPSRAILPEA')
-    COALESCE(PCUS.ID,CUS.ID) NOT IN (84739,126657) 
-    """
-    newload=pd.read_sql(query,cn,params=[date1,date2] )
-
+def Get_newload(carrierlat,carrierlon,cargolimit):
+    # cn = pyodbc.connect('DRIVER={SQL Server};SERVER=reportingdatabases;DATABASE=Bazooka;trusted_connection=true')
+    # cn = pyodbc.connect('DRIVER={SQL Server};SERVER=BazookaStaging;DATABASE=Bazooka;uid=BazookaAccess;pwd=C@y0te')
+    cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSDev;DATABASE=ResearchScience;trusted_connection=true')
+    if carrierlat is not None and carrierlon is not None:
+        query = """
+        declare @carrierlat as float =?
+        declare @carrierlon as float =?
+        declare @cargolimit as float =?
+        select * from 
+        [ResearchScience].[dbo].[Recommendation_Newloads]
+       where 
+        statetype=1 
+        and originLat between @carrierlat-10 and @carrierlat+10 
+        and originLon between  @carrierlon-5 and  @carrierlon+5
+        and value <= @cargolimit
+        """
+        newload = pd.read_sql(query, cn, params=[carrierlat,carrierlon,cargolimit])
+    else:
+        query = """
+        declare @cargolimit as float =?
+              select * from 
+              [ResearchScience].[dbo].[Recommendation_Newloads]
+             where 
+              statetype=1 and value <= @cargolimit
+              """
+        newload = pd.read_sql(query, cn,params=[cargolimit])
     return (newload)
 
 def multi_makeMatrix(x,y,z=[]):  #x is the hist load list, y is the unique ode list; x and y are pd.df structure
@@ -385,32 +361,45 @@ def check(carrier_load,newloads,carrier):
 def general_recommender(carrier,newloads):
 ##for new carriers, which has no hist data
 # margin and rpm and margin perc, needs to use all data from this corridor, no need to grab only from this carrier if this is a new carrier
-    carrier_load_score=[]
+    #carrier_load_score=[]
     carrierID = int(carrier.carrierID)
     corridor_info = read_corridor()
-    for i in range(0, len(newloads)):
-        newload = newloads.iloc[i]
-        if (any(corridor_info.corridor==newload.corridor)):
-            rpm= corridor_info[corridor_info.corridor==newload.corridor].rpm.values[0]
-            estimate_margin_p = corridor_info[corridor_info.corridor == newload.corridor].corrdor_margin_perc.values[0]
-        elif (any(corridor_info.OriginCluster==newload.originCluster)):
-            rpm = pd.DataFrame.mean(corridor_info[corridor_info.OriginCluster == newload.originCluster].rpm)
-            estimate_margin_p= pd.DataFrame.mean(corridor_info[corridor_info.OriginCluster == newload.originCluster].corrdor_margin_perc)
-        else:
-            rpm=pd.DataFrame.mean(corridor_info.rpm)
-            estimate_margin_p = pd.DataFrame.mean(corridor_info.corrdor_margin_perc)
-        score = {'carrierID': carrierID,
-             'loadID': newload.loadID,
-             # 'origin': newload.originCluster, 'destination': newload.destinationCluster,
-             # 'loaddate': newload.loaddate,
-                 'hist_perf': 0, 'rpm': rpm,
-                 #'estimated_margin': newload.customer_rate - rpm * (newload.miles + newload.originDH),
-                 'estimated_margin': newload.customer_rate - rpm * (newload.miles),
-                 'estimated_margin%': estimate_margin_p,
-                 'margin_perc': estimate_margin_p,
-                 'desired_OD': 0
-             }
-        carrier_load_score.append(score)
+# using merge instead of loop
+    newloads_rate = pd.DataFrame(newloads).merge(corridor_info, left_on="corridor", right_on="corridor",
+                                                    how='inner')
+    carrier_load_score=newloads_rate[['loadID','rpm','corrdor_margin_perc','customer_rate','miles']]
+    carrier_load_score['estimated_margin'] = carrier_load_score['customer_rate'] - carrier_load_score['rpm'] * carrier_load_score['miles']
+    carrier_load_score['estimated_margin%'] = carrier_load_score['corrdor_margin_perc']
+    carrier_load_score['margin_perc'] = carrier_load_score['corrdor_margin_perc']
+    carrier_load_score['carrierID'] = carrierID
+    carrier_load_score['hist_perf'] = 0
+    carrier_load_score['desired_OD'] = 0
+    carrier_load_score = carrier_load_score.drop(columns=["corrdor_margin_perc","customer_rate","miles"])
+
+
+    # for i in range(0, len(newloads)):
+    #     newload = newloads.iloc[i]
+    #     if (any(corridor_info.corridor==newload.corridor)):
+    #         rpm= corridor_info[corridor_info.corridor==newload.corridor].rpm.values[0]
+    #         estimate_margin_p = corridor_info[corridor_info.corridor == newload.corridor].corrdor_margin_perc.values[0]
+    #     elif (any(corridor_info.OriginCluster==newload.originCluster)):
+    #         rpm = pd.DataFrame.mean(corridor_info[corridor_info.OriginCluster == newload.originCluster].rpm)
+    #         estimate_margin_p= pd.DataFrame.mean(corridor_info[corridor_info.OriginCluster == newload.originCluster].corrdor_margin_perc)
+    #     else:
+    #         rpm=pd.DataFrame.mean(corridor_info.rpm)
+    #         estimate_margin_p = pd.DataFrame.mean(corridor_info.corrdor_margin_perc)
+    #     score = {'carrierID': carrierID,
+    #          'loadID': newload.loadID,
+    #          # 'origin': newload.originCluster, 'destination': newload.destinationCluster,
+    #          # 'loaddate': newload.loaddate,
+    #              'hist_perf': 0, 'rpm': rpm,
+    #              #'estimated_margin': newload.customer_rate - rpm * (newload.miles + newload.originDH),
+    #              'estimated_margin': newload.customer_rate - rpm * (newload.miles),
+    #              'estimated_margin%': estimate_margin_p,
+    #              'margin_perc': estimate_margin_p,
+    #              'desired_OD': 0
+    #          }
+    #     carrier_load_score.append(score)
     return (carrier_load_score)
 
 def indiv_recommender(carrier,newloads,loadList):
@@ -463,23 +452,44 @@ def dynamic_input(newloads_df,carrier):
     # newloads_df['puGap'] = gap
     # newloads_df['totalDH'] = originDH+destDH
     if  carrier.originLat is not None and carrier.originLon is not None:
-         newloads_ODH= {'originDH': newloads_df.apply(lambda row: geopy.distance.vincenty((row.originLat, row.originLon), (
-             float(carrier.originLat), float(carrier.originLon))).miles, axis=1)}
-         newloads_df.update(pd.DataFrame(newloads_ODH))
+        carlat=float(carrier.originLat)
+        carlon=float(carrier.originLon)
+        newloads_ODH= {'originDH': newloads_df.apply(lambda row: geopy.distance.vincenty((row.originLat, row.originLon), (
+            carlat, carlon)).miles, axis=1)}
+        newloads_df.update(pd.DataFrame(newloads_ODH))
+
+        #newloads_ODH= {'originDH': newloads_df.apply(lambda row: math.sqrt((row.originLat-carlat)**2+(row.originLon-carlon)**2)+69.1, axis=1)}
+        #newloads_df.update(pd.DataFrame(newloads_ODH))
+
+        #newloads_df['originDH'] = np.sqrt((newloads_df['originLat'] - carlat)**2 + (newloads_df['originLon'] - carlon)**2) * 69.1
+        #print (newloads_ODH['originDH']-newloads_df['originDH'])
+        #69.1 is 1 degree distance in miles
     if  carrier.destLat is not None and carrier.destLon is not None:
-         newloads_DDH= {'destDH': newloads_df.apply(lambda row: geopy.distance.vincenty((row.originLat, row.originLon), (
-             float(carrier.destLat), float(carrier.destLon))).miles, axis=1)}
-         newloads_df.update(pd.DataFrame(newloads_DDH))
+        carlat=float(carrier.destLat)
+        carlon=float(carrier.destLon)
+        newloads_DDH= {'destDH': newloads_df.apply(lambda row: geopy.distance.vincenty((row.destinationLat, row.destinationLon), (
+            carlat, carlon)).miles, axis=1)}
+        newloads_df.update(pd.DataFrame(newloads_DDH))
+        #newloads_df['destDH'] = np.sqrt((newloads_df['destinationLat'] - carlat) ** 2 + (newloads_df['destinationLon'] - carlon) ** 2) * 69.1
     if carrier.EmptyDate  is not None:
         if carrier.originLat is not None and carrier.originLon is not None:
-            newloads_puGap={'puGap': newloads_df.apply(lambda row: pu_Gap(pd.Timestamp(row.pu_appt), pd.Timestamp(carrier.EmptyDate),row.originDH/40.0),
-                                    axis=1)}
+
+            newloads_df['puGap'] = (pd.to_datetime(carrier.EmptyDate) - pd.to_datetime(newloads_df["pu_appt"]))/ np.timedelta64(3600, 's')-newloads_df["originDH"]/40.0
+
+            # newloads_puGap={'puGap': newloads_df.apply(lambda row: pu_Gap(pd.Timestamp(row.pu_appt), pd.Timestamp(carrier.EmptyDate),row.originDH/40.0),
+            #                         axis=1)}
         else:
-            newloads_puGap = {'puGap': newloads_df.apply(
-                lambda row: pu_Gap(pd.Timestamp(row.pu_appt), pd.Timestamp(carrier.EmptyDate), 0),
-                axis=1)}
-        newloads_df.update(pd.DataFrame(newloads_puGap))
-    newloads_df['totalDH'] = newloads_df.apply(lambda row: row.originDH + row.destDH, axis=1)
+
+            # newloads_df['puGap'] = pd.Timestamp(carrier.EmptyDate) - pd.to_datetime(newloads_df["pu_appt"]).astype(
+            #     'timedelta64[h]')
+            newloads_df['puGap'] = (pd.to_datetime(carrier.EmptyDate) - pd.to_datetime(newloads_df["pu_appt"]))/ np.timedelta64(3600, 's')
+            # newloads_puGap = {'puGap': newloads_df.apply(
+            #     lambda row: pu_Gap(pd.Timestamp(row.pu_appt), pd.Timestamp(carrier.EmptyDate), 0),
+            #     axis=1)}
+        #newloads_df.update(pd.DataFrame(newloads_puGap))
+
+    #newloads_df['totalDH'] = newloads_df.apply(lambda row: row.originDH + row.destDH, axis=1)
+    newloads_df['totalDH'] = newloads_df['originDH']+newloads_df['destDH']
     return newloads_df
 
 def reasoning(results_df):
@@ -530,48 +540,56 @@ def read_corridor():
     corridor_info=pd.read_sql(query,cn)
     return corridor_info
 
+def filter_newloads(carrier,newloads_df,carrier_load):
+    ## add a condition to filter the corridors that this carrier is interested in in the history
+    ## will extend this ode with search history and DOT inspection data
+    if carrier.originLat is None or carrier.originLon is None:
+        trucks_corridor = Get_truckSearch(carrier.carrierID)
+        newloads_df1 = []
+        newloads_df2 = []
+        if len(trucks_corridor) > 0:
+            newloads_df1 = newloads_df[
+                (newloads_df['originCluster'].isin(trucks_corridor.originCluster)) | (
+                newloads_df['destinationCluster'].isin(trucks_corridor.destinationCluster))]
+        if carrier_load['flag'] == 1:
+            # loadList_ode = carrier_load['histload']['corridor'].tolist()
+            origins = carrier_load['histload']['originCluster'].tolist()
+            dests = carrier_load['histload']['destinationCluster'].tolist()
+            newloads_df2 = newloads_df[
+                (newloads_df['originCluster'].isin(origins)) | (newloads_df['destinationCluster'].isin(dests))]
+        if len(newloads_df1) > 0 and len(newloads_df2) > 0:
+            newloads_df = pd.concat([newloads_df1, newloads_df2])
+            newloads_df = newloads_df.drop_duplicates()
+        elif len(newloads_df1) > 0:
+            newloads_df = newloads_df1
+            newloads_df = newloads_df.drop_duplicates()
+        elif len(newloads_df2) > 0:
+            newloads_df = newloads_df2
+            newloads_df = newloads_df.drop_duplicates()
+
+    return newloads_df
+
 def recommender( carrier_load,trucks_df):
     t=TicToc()
     t.tic()
     originDH_default = 250  # get radius
     destDH_default = 300
     gap_default=48
-    date1_default = now.strftime("%Y-%m-%d")
-    date2_default = (datetime.timedelta(1) + now).strftime("%Y-%m-%d")
+    #date1_default = now.strftime("%Y-%m-%d")
+    #date2_default = (datetime.timedelta(1) + now).strftime("%Y-%m-%d")
 
     ##initialization of the final results
     #results_sort_df = pd.DataFrame(columns=['loadID', 'Reason', 'Score'])
     result_json = {'Loads': []}
 
     carrier = trucks_df.iloc[0]
-    newloadsall_df = Get_newload(date1_default,date2_default)
-     ### should deal with if equipmenttype is a string carrier['EquipmentType'].fillna('', inplace=True)
-    ###This part is for new api input
+    newloads_df = Get_newload(carrier.originLat,carrier.originLon,carrier.cargolimit)
 
-    # if any date will be put in, change the variables.
-    # if date1 is not None and date2 is not None:
-    #     Get_newload(date1,date2)
-    # elif date2 is None:
-    #     date2=date1 + 1
-    #     Get_newload(date1,date2)
-    # else:
-    #     Get_newload()
+    #newloads_df = newloadsall_df[(newloadsall_df.value <= float(carrier.cargolimit))
+    #                             & [carrier.EquipmentType in equip for equip in newloadsall_df.equipment]
+    #                             & (newloadsall_df.equipmentlength <= float(carrier.EquipmentLength))]
 
-
-    newloads_df = newloadsall_df[(newloadsall_df.value <= float(carrier.cargolimit))
-                                 & [carrier.EquipmentType in equip for equip in newloadsall_df.equipment]
-                                 & (newloadsall_df.equipmentlength <= float(carrier.EquipmentLength))]
-
-
-## add a condition to filter the corridors that this carrier is interested in in the history
-## will extend this ode with search history and DOT inspection data
-    if carrier.originLat is None or carrier.originLon is None:
-         if carrier_load['flag'] == 1:
-             #loadList_ode = carrier_load['histload']['corridor'].tolist()
-             origins = carrier_load['histload']['originCluster'].tolist()
-             newloads_df = newloads_df[ newloads_df['originCluster'].isin(origins) ]
-            #newloads_df = newloads_df[ (newloads_df['corridor'].isin(loadList_ode)) or (newloads_df['originCluster'].isin(origins))]
-### End
+    newloads_df=filter_newloads(carrier, newloads_df,carrier_load)
 
     t.toc('newload')
     # newloads_df = newloadsall_df[
@@ -648,9 +666,10 @@ def search():
     truck_input = request.args.to_dict()
     truck.update(truck_input)
     truck['cargolimit'] = Get_truckinsurance(truck['carrierID'])
+
     t.toc('truck')
     t.tic()
-    carrier_load = Get_Carrier_histLoad(truck['carrierID'],(datetime.timedelta(-90-7) + now).strftime("%Y-%m-%d"),(datetime.timedelta(-7) + now).strftime("%Y-%m-%d"))
+    carrier_load = Get_Carrier_histLoad(truck['carrierID'])
     carriers = []
     carriers.append(truck)
     carrier_df = pd.DataFrame(carriers)
