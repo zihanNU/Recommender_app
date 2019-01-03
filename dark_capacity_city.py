@@ -60,7 +60,7 @@ cluster_df=pd.DataFrame(cluster)
 
 cn = pyodbc.connect('DRIVER={SQL Server};SERVER=ANALYTICSDev;DATABASE=ResearchScience;trusted_connection=true')
 cursor = cn.cursor()
-for i in range(5,len(city_df)):
+for i in range(1,len(city_df)):
     city=city_df.iloc[i]
     cluster_test=cluster_df
     cluster_test['dist']=abs(cluster_test['Lat']-city['Latitude'])+abs(cluster_test['Lat']-city['Latitude'])
