@@ -325,14 +325,11 @@ def find_ode(kpilist, load, odlist ):
         x=kpilist[loc]
         weight = 1.0
         matchlist=x.loads
-
         perc=[weight] * len(matchlist)
-
-
     else:
         for x in kpilist:
         #if x.carrier not in carriers and (x.ode.origin == load.origin or x.ode.destination==load.destination) and x.ode.equipment ==load.equipment:
-            if x.ode.origin == load.origin or x.ode.destination == load.destination:
+            if x.ode.origin == load.originCluster  or x.ode.destination == load.destinationCluster:
                  matchlist=matchlist.append(x.loads)
 
                  if x.ode.origin_max>0:
