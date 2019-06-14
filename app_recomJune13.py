@@ -223,15 +223,15 @@ def find_ode_pd(kpilist, load, odlist):
     """
     matchlist = pd.DataFrame()
     perc = []
-    if load.corridor is.in odlist.corridor:
+    if load.corridor in odlist['corridor'].tolist():
         weight = 1.0
         matchlist = kpilist[kpilist['corricor' == load.corridor]]
         perc = [weight] * len(matchlist)
-    if load.originCluster is.in odlist.origin and load.destinationCluster not.in odlist.destination:
+    if load.originCluster in odlist.origin.tolist() and load.destinationCluster not in odlist.destination.tolist():
         # weight=1.0
         matchlist = pd.concat(matchlist, kpilist[kpilist['originCluster' == load.originCluster]])
         perc = perc + kpilist['origin_max_weight'][kpilist['originCluster' == load.originCluster]].tolist()
-    if load.destinationCluster is.in odlist.destination and load.originCluster not.in odlist.origin:
+    if load.destinationCluster in odlist.destination.tolist() and load.originCluster not in odlist.origin.tolist():
         matchlist = pd.concat(matchlist, kpilist[kpilist['destinationCluster' == load.destinationCluster]])
         perc.append(kpilist['dest_max_weight'][kpilist['destinationCluster' == load.destinationCluster]].tolist())
 
