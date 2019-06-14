@@ -207,6 +207,55 @@ def find_ode_noweight(kpilist, load, odlist):
     return matchlist, vol
 
 
+def find_ode_pd(kpilist, load, odlist):
+    """find_ode method
+
+    Args:
+        kpilist: the entire histloads
+        load: this is a single newload from the QUERY.get_newload resultset
+        odlist: the hist origin, destination and equipment
+
+    Returns:
+        matchlist: a df of matching loads
+        perc: a percentage or confidence in the match?
+        vol: the count of matching loads
+
+    """
+    matchlist = pd.DataFrame()
+    perc = []
+    if load.corridor is.in odlist.corridor:
+        weight = 1.0
+        matchlist = kpilist[kpilist['corricor' == load.corridor]]
+        perc = [weight] * len(matchlist)
+    if load.originCluster is.in odlist.origin and load.destinationCluster not.in odlist.destination:
+        # weight=1.0
+        matchlist = pd.concat(matchlist, kpilist[kpilist['originCluster' == load.originCluster]])
+        perc = perc + kpilist['origin_max_weight'][kpilist['originCluster' == load.originCluster]].tolist()
+    if load.destinationCluster is.in odlist.destination and load.originCluster not.in odlist.origin:
+        matchlist = pd.concat(matchlist, kpilist[kpilist['destinationCluster' == load.destinationCluster]])
+        perc.append(kpilist['dest_max_weight'][kpilist['destinationCluster' == load.destinationCluster]].tolist())
+
+    ##        for x in kpilist:
+    ##        #if x.carrier not in carriers and (x.ode.origin == load.origin or x.ode.destination==load.destination) and x.ode.equipment ==load.equipment:
+    ##        # did not check equipment type, can be added
+    ##        # use max as the scaling can make the number to small; should use avg or medean instead of max,
+    ##            if x.ode.origin == load.originCluster or x.ode.destination == load.destinationCluster:
+    ##                 matchlist=matchlist.append(x.loads)
+    ##
+    ##                 if x.ode.origin_max>0:
+    ##                     origin_weight= x.ode.origin_max_weight
+    ##                 else:
+    ##                     origin_weight=0
+    ##                 if x.ode.dest_max>0:
+    ##                     dest_weight=x.ode.dest_max_weight
+    ##                 else:
+    ##                     dest_weight=0
+    ##                 weight= max(origin_weight,dest_weight)
+    ##                 perc= perc + [weight] * len(x.loads)
+    vol = len(matchlist)
+    return matchlist, perc, vol
+
+
 def similarity(loadlist, newload, weight):
     carrier_scores = []
     miles_weight = 20
@@ -223,9 +272,7 @@ def similarity(loadlist, newload, weight):
                             do_appt_diff]
         newload_feature = [0.0001, 0.0001, newload.industryID, newload.miles / miles_weight, 0.0001, 0.0001]
         sim = 1 - spatial.distance.cosine(histload_feature, newload_feature)
-
         # other feature could be 'pu_GAP','DH' --- need to verify later
-
         carrier_scores.append(
             {'carrierID': load.carrierID, 'loadID': newload.loadID, 'similarity': sim,
              'kpi': load.kpiScore * load.kpiweight,
@@ -336,27 +383,30 @@ def indiv_recommender_nomultiprocess(carrier, newloads, loadList):
 
     # carriers = sorted(set(loadList.carrierID.tolist()))
     histode = get_odelist_hist(loadList)
+
     # odelist = set(histode)   # set is not useful for the object list
     # odelist = histode.drop_duplicates(subset=['origin', 'destination', 'equipment'])
 
     # kpiMatrix,kpi_odlist = makeMatrix(loadList, odelist, carriers)
-    kpiMatrix, kpi_odlist = makeMatrix(loadList, histode, carrierID)
+    # kpiMatrix, kpi_odlist = makeMatrix(loadList, histode, carrierID)
+
+    #### Update here, no need to use the kpiMatrix, can use pandas select instead
+
     carrier_load_score = []
 
     # for i in range(0, len(newloads)):
     for newload in newloads.itertuples():
         #       newload=newloads.iloc[i]
-
         # new_ode=get_odelist_new(newload)
         # matchlist,   weight, corridor_vol = find_ode_noweight(kpiMatrix,newload,kpi_odlist )
-        matchlist, weight, corridor_vol = find_ode(kpiMatrix, newload, kpi_odlist)
+        # matchlist,   weight, corridor_vol = find_ode(kpiMatrix,newload,kpi_odlist )
+        matchlist, weight, corridor_vol = find_ode_pd(loadList, newload, histode)
         if len(matchlist) > 0:
             score = similarity(matchlist, newload, weight)
             score['desired_OD'] = 100 if corridor_vol > min(len(loadList) * 0.1, 10) else 0
         else:
             score = {'carrierID': carrierID,
                      'loadID': int(newload.loadID),
-
                      'hist_perf': 0, 'rpm': pd.DataFrame.mean(loadList.rpm),
                      # 'estimated_margin': newload.customer_rate - pd.DataFrame.mean(loadList.rpm) * (newload.miles+newload.originDH),
                      'estimated_margin': newload.customer_rate - pd.DataFrame.mean(loadList.rpm) * (newload.miles),
@@ -364,7 +414,6 @@ def indiv_recommender_nomultiprocess(carrier, newloads, loadList):
                              newload.miles + newload.originDH) / newload.customer_rate * 100,
                      'margin_perc': pd.DataFrame.mean(loadList.margin_perc),
                      'desired_OD': 0}
-
         carrier_load_score.append(score)
 
     return (carrier_load_score)
